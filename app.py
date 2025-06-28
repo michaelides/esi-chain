@@ -16,6 +16,7 @@ from io import BytesIO
 from llama_index.core.tools import FunctionTool
 
 from huggingface_hub import HfFileSystem
+from config import HF_TOKEN
 # import os # Already imported
 
 # Import ui.py to make Chainlit decorators discoverable
@@ -637,38 +638,45 @@ class AppState:
         prompts = await cl.make_async(generate_suggested_prompts)(chat_history_list)
         return prompts
 
+    async def greet_user(self):
+        """Sends the initial greeting message and sets up UI elements."""
+        await cl.Message(content=self.initial_greeting_text, author="ESI").send()
+        await ui.setup_actions_and_settings()
+
+    async def display_suggested_prompts(self):
+        """Displays suggested prompts as actions."""
+        if self.suggested_prompts:
+            actions = [cl.Action(name=prompt, value=prompt, label=prompt) for prompt in self.suggested_prompts]
+            await cl.Message(content="Here are some things you can ask:", actions=actions).send()
+
 # --- Chainlit Integration ---
 # The main way to integrate is for ui.py's @cl.on_chat_start to create an AppState instance
 # and store it in cl.user_session. Then, all other Chainlit callbacks in ui.py
 # will retrieve this instance and call its methods.
 
 @cl.on_chat_start
-async def chainlit_chat_start():
-    """Called by Chainlit when a new chat session starts."""
-    # Create and initialize AppState
+async def on_chat_start():
+    """
+    Initializes the application state and greets the user.
+    This function is called when a new chat session starts.
+    """
+    # Create an instance of AppState, which also handles global LLM initialization
     app_state = AppState(cl.user_session)
+    
+    # Store the instance in the user session
+    cl.user_session.set("app_state", app_state)
+    
+    # Now, call the async initialization method on the instance
     await app_state.initialize_session()
-    cl.user_session.set("app_state", app_state) # Store instance in session for ui.py
-
-    # ui.py's on_chat_start will then use this app_state to set up the UI.
-    # This file (app.py) primarily defines the AppState class.
-    # The actual UI interaction flow (sending initial messages, asking for files)
-    # should be in ui.py's @cl.on_chat_start, which can now access the initialized app_state.
-
-    # Example: Let ui.py handle the initial greeting message using app_state.initial_greeting_text
-    # and app_state.suggested_prompts.
-
-    # This function in app.py is mainly to ensure AppState is created and initialized.
-    # The ui.py @cl.on_chat_start will then take over for UI presentation.
-    # Consider moving the UI message sending part to ui.py's on_chat_start.
-
-    # Pass control to ui.py's startup logic by having it retrieve app_state
-    # For example, ui.py's @cl.on_chat_start might look like:
-    #   app_s = cl.user_session.get("app_state")
-    #   await cl.Message(content=app_s.initial_greeting_text).send()
-    #   await display_suggested_prompts(app_s.suggested_prompts) # Another function in ui.py
-    #   await setup_settings_panel(app_s) # etc.
-    print("app.py: @cl.on_chat_start: AppState initialized and stored in user_session.")
+    
+    # Set up the message history
+    cl.user_session.set("messages", app_state.messages)
+    
+    # Greet the user and display prompts via the instance
+    await app_state.greet_user()
+    await app_state.display_suggested_prompts()
+    
+    print(f"app.py: @cl.on_chat_start: AppState initialized and stored in user_session.")
 
 
 # The Chainlit CLI will be used to run the app, e.g., `chainlit run app.py -w`
