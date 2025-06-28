@@ -255,6 +255,11 @@ async def on_message(message: cl.Message):
                 file_name = element.name
                 file_content = element.content # Bytes content
 
+                # Check if file_content is None before writing
+                if file_content is None:
+                    await cl.Message(content=f"Warning: Could not get content for uploaded file '{file_name}'. Skipping processing.", author="System").send()
+                    continue # Skip to the next element
+
                 # Save to UI_ACCESSIBLE_WORKSPACE
                 ensure_workspace()
                 workspace_file_path = os.path.join(UI_ACCESSIBLE_WORKSPACE, file_name)
@@ -356,7 +361,7 @@ async def on_message(message: cl.Message):
         await msg.stream_token(token) # Stream token to the UI
 
     # After streaming, process the full response content for RAG sources and download markers
-    elements = []
+    elements = [] # This list will hold the elements
     text_to_display = full_response_content
     rag_sources_data = []
     code_download_filename = None
@@ -438,7 +443,7 @@ async def on_message(message: cl.Message):
 
     # Update the message with the final content and elements
     msg.content = text_to_display if text_to_display else " "
-    msg.elements = elements if elements else None
+    msg.elements = elements # Assign the list directly, even if empty
     await msg.update()
 
     # Store assistant response (the full string content)
