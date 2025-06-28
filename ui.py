@@ -181,9 +181,6 @@ async def setup_chat_settings_sidebar():
     # cl.user_session.set("uploaded_files_info", uploaded_files_info)
 
 
-
-
-
 async def setup_actions_and_settings():
     """Sets up persistent actions and settings UI elements."""
     app_state = cl.user_session.get("app_state") # Assuming app.py provides this
@@ -197,7 +194,7 @@ async def setup_actions_and_settings():
     # These settings are more naturally handled via a settings modal in Chainlit.
     # For now, we'll rely on app.py to manage these and potentially make them settable via commands.
 
-    if app_state and app_state.get_long_term_memory_enabled(): # Hypothetical
+    if app_state and app_state.long_term_memory_enabled: # Corrected: Access attribute directly
         actions.append(cl.Action(name="forget_me", value="forget_me", label="🗑️ Forget Me", description="Delete all your saved data", payload={}))
 
     # Display chat history if LTM enabled (this is complex with Chainlit's model)
@@ -337,7 +334,7 @@ async def on_message(message: cl.Message):
     # For now, simulate a response:
     # Simulating response generation
     # In reality, this comes from handle_user_input_callback(message.content)
-    if not app_instance or not hasattr(app_instance, 'handle_user_input'):
+    if not app_state or not hasattr(app_state, 'handle_user_input'):
         simulated_response = "App instance or handle_user_input not configured. Cannot process message."
         await cl.Message(content=simulated_response, author="System").send()
         return
@@ -349,7 +346,7 @@ async def on_message(message: cl.Message):
     # Before calling handler, make sure app_instance knows about current settings from user_session
     # app_instance.update_settings_from_chainlit_session(cl.user_session) # Hypothetical
 
-    assistant_response_content = await app_instance.handle_user_input(message.content)
+    assistant_response_content = await app_state.handle_user_input(message.content)
 
     # Store assistant response
     cl.user_session.get("messages").append({"role": "assistant", "content": assistant_response_content})
