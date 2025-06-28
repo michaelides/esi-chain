@@ -235,8 +235,12 @@ async def on_message(message: cl.Message):
     """
     app_state = cl.user_session.get("app_state") # Critical: app.py must set this
 
-    # Store user message
-    cl.user_session.get("messages").append({"role": "user", "content": message.content})
+    # Ensure messages list exists in user_session
+    current_messages = cl.user_session.get("messages")
+    if current_messages is None:
+        current_messages = []
+        cl.user_session.set("messages", current_messages)
+    current_messages.append({"role": "user", "content": message.content})
 
     # --- File Upload Handling ---
     # Chainlit automatically makes uploaded files available in message.elements
@@ -287,7 +291,12 @@ async def on_message(message: cl.Message):
                         elif file_extension in [".md", ".txt"]:
                             text_content = file_content.decode("utf-8")
 
-                        cl.user_session.get("uploaded_documents")[file_name] = text_content
+                        # Ensure uploaded_documents dict exists in user_session
+                        uploaded_docs = cl.user_session.get("uploaded_documents")
+                        if uploaded_docs is None:
+                            uploaded_docs = {}
+                            cl.user_session.set("uploaded_documents", uploaded_docs)
+                        uploaded_docs[file_name] = text_content
                         processed_files_info.append(f"Document '{file_name}' processed for agent access. You can now ask me to `read_uploaded_document('{file_name}')`.")
                     except Exception as e:
                         await cl.Message(content=f"Error processing document '{file_name}': {e}", author="System").send()
@@ -304,7 +313,12 @@ async def on_message(message: cl.Message):
                             df = pd.read_spss(workspace_file_path) # Requires pyreadstat
 
                         if df is not None:
-                            cl.user_session.get("uploaded_dataframes")[file_name] = df # Storing actual DataFrame might be memory intensive. Consider storing path.
+                            # Ensure uploaded_dataframes dict exists in user_session
+                            uploaded_dfs = cl.user_session.get("uploaded_dataframes")
+                            if uploaded_dfs is None:
+                                uploaded_dfs = {}
+                                cl.user_session.set("uploaded_dataframes", uploaded_dfs)
+                            uploaded_dfs[file_name] = df # Storing actual DataFrame might be memory intensive. Consider storing path.
                             processed_files_info.append(f"Dataset '{file_name}' processed. You can now ask me to `analyze_uploaded_dataframe('{file_name}')` or use `code_interpreter`.")
                         else:
                             await cl.Message(content=f"Could not load dataframe from '{file_name}'.", author="System").send()
@@ -321,7 +335,8 @@ async def on_message(message: cl.Message):
     if processed_files_info:
         for info_msg in processed_files_info:
             await cl.Message(content=info_msg, author="Assistant").send()
-            cl.user_session.get("messages").append({"role": "assistant", "content": info_msg})
+            # Append to current_messages, not cl.user_session.get("messages") directly
+            current_messages.append({"role": "assistant", "content": info_msg})
 
 
     # --- Call the main input handler from app.py ---
@@ -427,7 +442,7 @@ async def on_message(message: cl.Message):
     await msg.update()
 
     # Store assistant response (the full string content)
-    cl.user_session.get("messages").append({"role": "assistant", "content": full_response_content})
+    current_messages.append({"role": "assistant", "content": full_response_content})
 
 
 @cl.action_callback("new_chat")
