@@ -151,16 +151,17 @@ async def setup_chat_settings_sidebar():
     search_results_count = app_state.search_results_count if app_state else cl.user_session.get("search_results_count", 5)
     long_term_memory_enabled = app_state.long_term_memory_enabled if app_state else cl.user_session.get("long_term_memory_enabled", False)
 
-    settings_inputs = [
-        cl.Slider(id="llm_temperature", label="Creativity (Temperature)", initial=llm_temperature, min=0.0, max=2.0, step=0.1),
-        cl.Slider(id="llm_verbosity", label="Verbosity", initial=llm_verbosity, min=1, max=5, step=1),
-        cl.Slider(id="search_results_count", label="Number of Search Results", initial=search_results_count, min=3, max=15, step=1),
-        cl.Switch(id="long_term_memory_enabled", label="Enable Long-term Memory", initial=long_term_memory_enabled)
-    ]
+    # Commenting out cl.Slider and cl.Switch due to KeyError, likely Python 3.13 incompatibility
+    # settings_inputs = [
+    #     cl.Slider(id="llm_temperature", label="Creativity (Temperature)", initial=llm_temperature, min=0.0, max=2.0, step=0.1),
+    #     cl.Slider(id="llm_verbosity", label="Verbosity", initial=llm_verbosity, min=1, max=5, step=1),
+    #     cl.Slider(id="search_results_count", label="Number of Search Results", initial=search_results_count, min=3, max=15, step=1),
+    #     cl.Switch(id="long_term_memory_enabled", label="Enable Long-term Memory", initial=long_term_memory_enabled)
+    # ]
     
     # Send the ChatSettings object to make the sidebar appear
-    await cl.ChatSettings(settings_inputs).send()
-    print("ui.py: cl.ChatSettings sent to display settings sidebar.")
+    # await cl.ChatSettings(settings_inputs).send() # Commented out due to KeyError
+    print("ui.py: cl.ChatSettings call commented out due to KeyError. Settings sidebar will not be displayed.")
 
     # Actions defined here are not sent to the sidebar directly by Chainlit's default behavior.
     # actions = [cl.Action(name="new_chat", value="new_chat", label="➕ New Chat")]
@@ -438,6 +439,12 @@ async def on_message(message: cl.Message):
 
     # Store assistant response (the full string content)
     current_messages.append({"role": "assistant", "content": full_response_content})
+
+    # --- New Suggested Prompts Implementation ---
+    suggestions = cl.CustomElement(
+        name="FollowUpSuggestions", suggestions=["Foo", "Bar"]
+    )
+    await cl.Message(content="Suggestions:", elements=[suggestions]).send()
 
 
 @cl.action_callback("new_chat")
