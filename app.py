@@ -513,6 +513,7 @@ class AppState:
         
         temp_last_user_msg = self.messages.pop() # Pop user message for history
         
+        full_response_content = "" # Initialize the variable here
         async for token in self.get_agent_response_stream(last_user_query): # last_user_query is correct
             full_response_content += token
             yield token
