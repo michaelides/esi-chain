@@ -198,8 +198,8 @@ async def setup_actions_and_settings():
     #         actions.append(cl.Action(name=f"switch_chat_{chat_id}", value=chat_id, label=f"Switch to: {chat_name}"))
 
     # Use cl.set_actions to place actions in the header, not in the main chat area
-    await cl.set_actions(actions)
-    print("ui.py: cl.set_actions sent to display header actions.")
+    # await cl.set_actions(actions) # Commented out due to KeyError
+    print("ui.py: cl.set_actions call commented out due to KeyError. Header actions will not be displayed.")
 
     # Now, set up the actual chat settings sidebar
     await setup_chat_settings_sidebar()
