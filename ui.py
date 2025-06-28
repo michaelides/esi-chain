@@ -196,8 +196,8 @@ async def setup_actions_and_settings():
     #     for chat_id, chat_name in chat_metadata.items():
     #         actions.append(cl.Action(name=f"switch_chat_{chat_id}", value=chat_id, label=f"Switch to: {chat_name}"))
 
-    cl.user_session.set("main_actions", actions) # Store for display or use in UI elements
-    await cl.Message(content="", actions=actions).send() # Send an empty message just to attach actions
+    # Use cl.set_actions to place actions in the header, not in the main chat area
+    await cl.set_actions(actions)
 
     # Now, set up the actual chat settings sidebar
     await setup_chat_settings_sidebar()
