@@ -1,1059 +1,687 @@
-import streamlit as st
+import chainlit as cl
 import os
 import json
 import re
 import uuid
-import extra_streamlit_components as esc
-from typing import List, Dict, Any
+# import extra_streamlit_components as esc # Removed Streamlit specific component
+from typing import List, Dict, Any, Optional, AsyncGenerator
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core import Settings
-import stui
+# import stui # Removed Streamlit UI import
 from agent import create_orchestrator_agent, generate_suggested_prompts, SUGGESTED_PROMPT_COUNT, DEFAULT_PROMPTS, initialize_settings as initialize_agent_settings, generate_llm_greeting
 from dotenv import load_dotenv
 from docx import Document
 from io import BytesIO
-import io # Import io module for BytesIO
-from llama_index.core.tools import FunctionTool # Import FunctionTool
+# import io # Already imported BytesIO
+from llama_index.core.tools import FunctionTool
 
-# Import necessary libraries for Hugging Face integration
-from huggingface_hub import HfFileSystem 
-import os # Import os to access environment variables
+from huggingface_hub import HfFileSystem
+# import os # Already imported
 
-# Initialize HfFileSystem globally
-fs = HfFileSystem() 
+# Import ui.py to make Chainlit decorators discoverable
+import ui # IMPORTANT
+
+fs = HfFileSystem()
 load_dotenv()
 
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 
-cookies = esc.CookieManager(key="esi_cookie_manager")
+# cookies = esc.CookieManager(key="esi_cookie_manager") # Removed Streamlit specific cookie manager
+# Chainlit handles sessions differently. User identity might be managed by Chainlit or custom auth.
 
 SIMPLE_STORE_PATH_RELATIVE = os.getenv("SIMPLE_STORE_PATH", "ragdb/simple_vector_store")
 DB_PATH = os.path.join(PROJECT_ROOT, SIMPLE_STORE_PATH_RELATIVE)
-AGENT_SESSION_KEY = "esi_orchestrator_agent"
-DOWNLOAD_MARKER = "---DOWNLOAD_FILE---"
-RAG_SOURCE_MARKER_PREFIX = "---RAG_SOURCE---"
+# AGENT_SESSION_KEY = "esi_orchestrator_agent" # Will be part of AppState
+DOWNLOAD_MARKER = "---DOWNLOAD_FILE---" # Still used for formatting messages
+RAG_SOURCE_MARKER_PREFIX = "---RAG_SOURCE---" # Still used for formatting messages
 
-# Import UI_ACCESSIBLE_WORKSPACE from tools.py
 from tools import UI_ACCESSIBLE_WORKSPACE
-# Import HF_USER_MEMORIES_DATASET_ID from config.py
 from config import HF_USER_MEMORIES_DATASET_ID
 
-# Constant to control the maximum number of messages sent in chat history to the LLM
-MAX_CHAT_HISTORY_MESSAGES = 15 # Keep the last N messages to manage context length
+MAX_CHAT_HISTORY_MESSAGES = 15
 
-@st.cache_resource
-def setup_global_llm_settings() -> tuple[bool, str | None]:
-    """Initializes global LLM settings using st.cache_resource to run only once."""
-    print("Initializing LLM settings...")
-    try:
-        initialize_agent_settings()
-        print("LLM settings initialized successfully.")
-        return True, None
-    except Exception as e:
-        error_message = f"Fatal Error: Could not initialize LLM settings. {e}"
-        print(error_message)
-        return False, error_message
+# Global flag to ensure LLM settings are initialized once per application lifecycle
+_global_llm_settings_initialized = False
+_global_llm_initialization_error: Optional[str] = None
 
-# New cached function for initial greeting
-@st.cache_data(show_spinner=False)
-def _get_initial_greeting_text():
-    """Generates and caches the initial LLM greeting text for startup."""
-    return generate_llm_greeting()
+class AppState:
+    def __init__(self, user_session): # Removed cl.UserSession type hint
+        self.user_session = user_session # Store the Chainlit user session
+        self.user_id: Optional[str] = None
+        self.agent: Optional[Any] = None
+        self.chat_metadata: Dict[str, str] = {}
+        self.all_chat_messages: Dict[str, List[Dict[str, Any]]] = {}
+        self.current_chat_id: Optional[str] = None
+        self.messages: List[Dict[str, Any]] = [] # Current chat messages
+        self.suggested_prompts: List[str] = DEFAULT_PROMPTS.copy()
 
-# New cached wrapper for suggested prompts
-@st.cache_data(show_spinner=False)
-def _cached_generate_suggested_prompts(chat_history: List[Dict[str, Any]]) -> List[str]:
-    """
-    Generates suggested prompts based on chat history, cached to avoid redundant LLM calls.
-    The cache key is based on the content of chat_history.
-    """
-    print("Generating suggested prompts...")
-    return generate_suggested_prompts(chat_history)
+        self.uploaded_documents: Dict[str, str] = {} # filename: content
+        self.uploaded_dataframes: Dict[str, Any] = {} # filename: dataframe (consider storing path/summary)
 
-# Define dynamic tool functions that can access st.session_state
-def read_uploaded_document_tool_fn(filename: str) -> str:
-    """Reads the full text content of a document previously uploaded by the user.
-    Input is the exact filename (e.g., 'my_dissertation.pdf')."""
-    if "uploaded_documents" not in st.session_state or filename not in st.session_state.uploaded_documents:
-        return f"Error: Document '{filename}' not found in uploaded documents. Available documents: {list(st.session_state.uploaded_documents.keys())}"
-    return st.session_state.uploaded_documents[filename]
+        # LLM Settings - to be loaded/managed
+        self.llm_temperature: float = 0.7
+        self.llm_verbosity: int = 3
+        self.search_results_count: int = 5
+        self.long_term_memory_enabled: bool = True # Default, will be loaded from user preference
 
-def analyze_dataframe_tool_fn(filename: str, head_rows: int = 5) -> str:
-    """Provides summary information (shape, columns, dtypes, head, describe) about a pandas DataFrame
-    previously uploaded by the user. Input is the exact filename (e.g., 'my_data.csv').
-    For more complex analysis, use the 'code_interpreter' tool."""
-    if "uploaded_dataframes" not in st.session_state or filename not in st.session_state.uploaded_dataframes:
-        return f"Error: DataFrame '{filename}' not found in uploaded dataframes. Available dataframes: {list(st.session_state.uploaded_dataframes.keys())}"
-    
-    df = st.session_state.uploaded_dataframes[filename]
-    
-    info_str = f"DataFrame: {filename}\n"
-    info_str += f"Shape: {df.shape}\n"
-    info_str += f"Columns: {', '.join(df.columns)}\n"
-    info_str += f"Data Types:\n{df.dtypes.to_string()}\n"
-    
-    # Ensure head_rows is not negative and not too large
-    head_rows = max(0, min(head_rows, len(df)))
-    if head_rows > 0:
-        info_str += f"First {head_rows} rows:\n{df.head(head_rows).to_string()}\n"
-    else:
-        info_str += "No head rows requested or available.\n"
+        self.chat_modified: bool = False # Tracks if current chat needs saving
+        self.initial_greeting_text: str = "" # Will be generated
 
-    info_str += f"Summary Statistics:\n{df.describe().to_string()}\n"
-    
-    return info_str
+        # Ensure global LLM settings are set up
+        global _global_llm_settings_initialized, _global_llm_initialization_error
+        if not _global_llm_settings_initialized and not _global_llm_initialization_error:
+            try:
+                initialize_agent_settings()
+                _global_llm_settings_initialized = True
+                print("Global LLM settings initialized successfully.")
+            except Exception as e:
+                _global_llm_initialization_error = f"Fatal Error: Could not initialize LLM settings. {e}"
+                print(_global_llm_initialization_error)
 
-@st.cache_resource
-def setup_agent(max_search_results: int) -> tuple[Any | None, str | None]:
-    """Initializes the orchestrator agent using st.cache_resource to run only once per max_search_results value.
-    Returns a tuple (agent_instance, error_message).
-    agent_instance is None if an error occurred.
-    error_message is None if successful.
-    """
-    print("Initializing AI agent...")
-    try:
-        # Create dynamic tools here, passing the functions defined above
-        uploaded_doc_reader_tool = FunctionTool.from_defaults(
-            fn=read_uploaded_document_tool_fn,
-            name="read_uploaded_document",
-            description="Reads the full text content of a document previously uploaded by the user. Input is the exact filename (e.g., 'my_dissertation.pdf'). Use this to answer questions about the content of uploaded documents."
-        )
+        if _global_llm_initialization_error:
+            # If there's a global error, we might want to prevent agent setup or signal error to UI
+            print(f"AppState initialized with global LLM error: {_global_llm_initialization_error}")
 
-        dataframe_analyzer_tool = FunctionTool.from_defaults(
-            fn=analyze_dataframe_tool_fn,
-            name="analyze_uploaded_dataframe",
-            description="Provides summary information (shape, columns, dtypes, head, describe) about a pandas DataFrame previously uploaded by the user. Input is the exact filename (e.g., 'my_data.csv'). Use this to understand the structure and basic statistics of uploaded datasets. For more complex analysis, use the 'code_interpreter' tool."
-        )
 
-        # Pass these dynamic tools and max_search_results to the agent creation function
-        agent_instance = create_orchestrator_agent(
-            dynamic_tools=[uploaded_doc_reader_tool, dataframe_analyzer_tool],
-            max_search_results=max_search_results # Pass the parameter here
-        )
-        print("AI agent initialized successfully.")
-        return agent_instance, None
-    except Exception as e:
-        error_message = f"Failed to initialize the AI agent. Please check configurations. Error: {e}"
-        print(f"Error initializing AI agent: {e}")
-        return None, error_message
+    async def initialize_session(self):
+        """Async initialization steps that depend on external factors or need async ops."""
+        print("AppState: Initializing session...")
 
-def _get_or_create_user_id(long_term_memory_enabled_param: bool) -> tuple[str, str]:
-    """
-    Determines user ID and necessary cookie action.
-    Returns a tuple: (user_id: str, cookie_action_flag: str).
-    cookie_action_flag can be "DO_NOTHING", "SET_COOKIE", or "DELETE_COOKIE".
-    This function NO LONGER performs cookie operations directly.
-    """
-    existing_user_id = cookies.get(cookie="user_id")
+        if _global_llm_initialization_error:
+            await cl.ErrorMessage(content=_global_llm_initialization_error, author="System").send()
+            # Potentially block further operations if LLM is critical
 
-    if long_term_memory_enabled_param:
-        if existing_user_id:
-            return existing_user_id, "DO_NOTHING"
+        # User ID and Long-Term Memory Preference
+        # Chainlit's cl.User might provide a stable ID if auth is used.
+        # For simplicity, we'll mimic cookie behavior using user_session for preference.
+        # A more robust solution would use Chainlit's user identification if available.
+
+        pref_from_session = self.user_session.get("long_term_memory_pref")
+        if pref_from_session is not None:
+            self.long_term_memory_enabled = bool(pref_from_session)
         else:
-            new_user_id = str(uuid.uuid4())
-            return new_user_id, "SET_COOKIE"
-    else:  # Long-term memory is disabled
-        temporary_user_id = str(uuid.uuid4())
-        if existing_user_id:
-            return temporary_user_id, "DELETE_COOKIE"
+            self.user_session.set("long_term_memory_pref", self.long_term_memory_enabled) # Save default
+
+        # User ID: Chainlit provides `cl.user_session.get("id")` which is unique per session.
+        # For persistent user ID across sessions (if LTM is on), we'd need custom handling
+        # or rely on Chainlit's auth features if enabled.
+        # For now, let's use a session-based ID and manage persistence via HF if LTM is on.
+        # This part needs careful thought for production to correctly map users to their HF data.
+
+        # Simplified user ID logic for now:
+        # If LTM is on, try to get a persistent ID (e.g., from Chainlit user object if auth is on, or a custom cookie)
+        # If LTM is off, or no persistent ID, use a session-specific ID.
+        self.user_id = self.user_session.get("id") # This is a session ID.
+        # TODO: Implement robust user ID management for LTM.
+        # For now, user_id will be the Chainlit session ID. This means LTM won't truly persist across browser closes
+        # without further work on user identification.
+
+        if self.long_term_memory_enabled and self.user_id: # Check user_id exists
+            print(f"Loading user data for user {self.user_id} from Hugging Face...")
+            user_data = self._load_user_data_from_hf(self.user_id)
+            self.chat_metadata = user_data.get("metadata", {})
+            self.all_chat_messages = user_data.get("messages", {})
+            print(f"Loaded {len(self.chat_metadata)} chats for user {self.user_id}.")
         else:
-            return temporary_user_id, "DO_NOTHING"
+            print(f"Long-term memory disabled or no user_id. No historical data loaded for user_id {self.user_id}.")
 
-@st.cache_resource
-def _initialize_user_session_data(long_term_memory_enabled_param: bool) -> tuple[str, Dict[str, Any], Dict[str, Any], str]:
-    """
-    Initializes user ID, loads chat data from Hugging Face (if long-term memory is enabled),
-    and returns the cookie action flag.
-    This function is cached to run only once per Streamlit session, or when its parameters change.
-    Returns: (user_id, chat_metadata, all_chat_messages, cookie_action_flag)
-    """
-    print("Initializing user session data...")
+        # Initialize LLM settings from user_session or defaults
+        self.llm_temperature = self.user_session.get("llm_temperature", self.llm_temperature)
+        self.llm_verbosity = self.user_session.get("llm_verbosity", self.llm_verbosity)
+        self.search_results_count = self.user_session.get("search_results_count", self.search_results_count)
 
-    user_id, cookie_action_flag = _get_or_create_user_id(long_term_memory_enabled_param)
+        self.initial_greeting_text = generate_llm_greeting() # Generate once
 
-    chat_metadata = {}
-    all_chat_messages = {}
+        # Setup agent
+        await self._setup_agent_async() # Make it async if agent setup can be slow
 
-    if long_term_memory_enabled_param:
-        print(f"Loading user data for user {user_id} from Hugging Face...")
-        user_data = _load_user_data_from_hf(user_id) # This function is not cached, but its call is within a cached function
-        chat_metadata = user_data["metadata"]
-        all_chat_messages = user_data["messages"]
-        print(f"Loaded {len(chat_metadata)} chats for user {user_id}.")
-    else:
-        print(f"Long-term memory disabled. No historical data loaded for temporary user_id {user_id}.")
+        # Active Chat and Initial Greeting Logic
+        if self.long_term_memory_enabled:
+            if self.chat_metadata: # If there are saved chats
+                # Try to load last active chat ID if stored, or default to first
+                last_chat_id = self.user_session.get("current_chat_id")
+                if last_chat_id and last_chat_id in self.chat_metadata:
+                    self.current_chat_id = last_chat_id
+                else:
+                    self.current_chat_id = next(iter(self.chat_metadata)) # First chat
 
-    return user_id, chat_metadata, all_chat_messages, cookie_action_flag
+                self.messages = self.all_chat_messages.get(self.current_chat_id, [])
+                self.chat_modified = True # Assume loaded chat is "modified" in terms of session state
+            else: # No saved chats, start new
+                await self.create_new_chat(is_initial_greeting=True)
+        else: # LTM disabled, always start new temporary chat
+            await self.create_new_chat(is_initial_greeting=True)
 
-def _load_user_data_from_hf(user_id: str) -> Dict[str, Any]:
-    """
-    Loads all chat metadata and histories for a user from JSON files on Hugging Face.
-    This function is NOT cached by Streamlit.
-    """
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        print("HF_TOKEN environment variable not set. Cannot load user data from Hugging Face.")
-        return {"metadata": {}, "messages": {}}
+        self.suggested_prompts = await self.generate_suggested_prompts_async(self.messages)
+        print("AppState session initialization complete.")
 
-    all_chat_metadata = {}
-    all_chat_messages = {}
+    async def _setup_agent_async(self):
+        print("AppState: Initializing AI agent...")
+        if _global_llm_initialization_error:
+            print(f"Skipping agent setup due to LLM init error: {_global_llm_initialization_error}")
+            self.agent = None
+            return
 
-    try:
-        # Use HF_USER_MEMORIES_DATASET_ID for user memories
-        metadata_filename_in_repo = f"user_memories/{user_id}_metadata.json"
-        messages_filename_in_repo = f"user_memories/{user_id}_messages.json"
-
-        # Construct the full HfFileSystem path
-        metadata_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{metadata_filename_in_repo}"
-        messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{messages_filename_in_repo}"
-
-        # Try to download and load metadata using HfFileSystem
         try:
-            metadata_content = fs.read_text(metadata_hf_path, token=hf_token)
-            all_chat_metadata = json.loads(metadata_content)
-        except FileNotFoundError as e:
-            print(f"Metadata file not found for user {user_id} at {metadata_hf_path}: {e}. Metadata will be empty.")
-            all_chat_metadata = {}
+            uploaded_doc_reader_tool = FunctionTool.from_defaults(
+                fn=self._read_uploaded_document_tool_fn, # Method of AppState
+                name="read_uploaded_document",
+                description="Reads the full text content of a document previously uploaded by the user. Input is the exact filename (e.g., 'my_dissertation.pdf'). Use this to answer questions about the content of uploaded documents."
+            )
+            dataframe_analyzer_tool = FunctionTool.from_defaults(
+                fn=self._analyze_dataframe_tool_fn, # Method of AppState
+                name="analyze_uploaded_dataframe",
+                description="Provides summary information (shape, columns, dtypes, head, describe) about a pandas DataFrame previously uploaded by the user. Input is the exact filename (e.g., 'my_data.csv'). Use this to understand the structure and basic statistics of uploaded datasets. For more complex analysis, use the 'code_interpreter' tool."
+            )
+            self.agent = create_orchestrator_agent(
+                dynamic_tools=[uploaded_doc_reader_tool, dataframe_analyzer_tool],
+                max_search_results=self.search_results_count
+            )
+            print("AppState: AI agent initialized successfully.")
         except Exception as e:
-            print(f"Error loading metadata for user {user_id} from {metadata_hf_path}: {e}. Metadata will be empty.")
-            all_chat_metadata = {}
+            error_message = f"Failed to initialize the AI agent. Please check configurations. Error: {e}"
+            print(f"Error initializing AI agent: {e}")
+            self.agent = None
+            await cl.ErrorMessage(content=error_message, author="System").send()
 
-        # Try to download and load messages using HfFileSystem
-        try:
-            messages_content = fs.read_text(messages_hf_path, token=hf_token)
-            all_chat_messages = json.loads(messages_content)
-        except FileNotFoundError as e:
-            print(f"Messages file not found for user {user_id} at {messages_hf_path}: {e}. Messages will be empty.")
-            all_chat_messages = {}
-        except Exception as e:
-            print(f"Error loading messages for user {user_id} from {messages_hf_path}: {e}. Messages will be empty.")
-            all_chat_messages = {}
+    # --- Tool Functions (as methods of AppState) ---
+    def _read_uploaded_document_tool_fn(self, filename: str) -> str:
+        if filename not in self.uploaded_documents:
+            return f"Error: Document '{filename}' not found. Available documents: {list(self.uploaded_documents.keys())}"
+        return self.uploaded_documents[filename]
 
-        return {"metadata": all_chat_metadata, "messages": all_chat_messages}
-
-    except Exception as e:
-        print(f"Error loading user data from Hugging Face for user {user_id}: {e}")
-        return {"metadata": {}, "messages": {}}
-
-def save_chat_history(user_id: str, chat_id: str, messages: List[Dict[str, Any]]):
-    """
-    Saves a specific chat history for a given user ID to a JSON file on Hugging Face.
-    """
-    if not st.session_state.long_term_memory_enabled:
-        return
-
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        print("HF_TOKEN environment variable not set. Skipping Hugging Face upload for chat history.")
-        return
-
-    try:
-        # Use HF_USER_MEMORIES_DATASET_ID for user memories
-        messages_filename_in_repo = f"user_memories/{user_id}_messages.json"
-        messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{messages_filename_in_repo}"
-
-        # Load existing messages, append the new chat, and save
-        try:
-            # Use fs.read_text to get the existing messages file content
-            existing_messages_content = fs.read_text(messages_hf_path, token=hf_token)
-            existing_messages = json.loads(existing_messages_content)
-        except FileNotFoundError as e:
-            print(f"Existing messages file not found at {messages_hf_path}: {e}. Starting with empty messages.")
-            existing_messages = {}
-        except Exception as e:
-            print(f"Error loading existing messages from {messages_hf_path}: {e}. Starting with empty messages.")
-            existing_messages = {}
-
-        existing_messages[chat_id] = messages
-
-        # Use fs.open to write the content
-        with fs.open(messages_hf_path, "w", token=hf_token) as f:
-            f.write(json.dumps(existing_messages, indent=2))
-        
-        print(f"Chat history for chat {chat_id} saved to {messages_filename_in_repo} on Hugging Face.")
-
-    except Exception as e:
-        print(f"Error saving chat history to Hugging Face for chat {chat_id} (user {user_id}): {e}")
-        st.error(f"Error saving chat history to cloud: {e}")
-
-def save_chat_metadata(user_id: str, chat_metadata: Dict[str, str]):
-    """Saves the chat metadata (ID to name mapping) for a user to a JSON file on Hugging Face."""
-    if not st.session_state.long_term_memory_enabled:
-        return
-
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        print("HF_TOKEN environment variable not set. Skipping Hugging Face upload for metadata.")
-        return
-
-    try:
-        # Use HF_USER_MEMORIES_DATASET_ID for user memories
-        metadata_filename_in_repo = f"user_memories/{user_id}_metadata.json"
-        metadata_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{metadata_filename_in_repo}"
-
-        # Use fs.open to write the content
-        with fs.open(metadata_hf_path, "w", token=hf_token) as f:
-            f.write(json.dumps(chat_metadata, indent=2))
-        
-        print(f"Chat metadata for user {user_id} saved to {metadata_filename_in_repo} on Hugging Face.")
-
-    except Exception as e:
-        print(f"Error saving chat metadata to Hugging Face for user {user_id}: {e}")
-        st.error(f"Error saving chat metadata to cloud: {e}")
-
-def format_chat_history(streamlit_messages: List[Dict[str, Any]]) -> List[ChatMessage]:
-    """
-    Converts Streamlit message history to LlamaIndex ChatMessage list,
-    truncating to the most recent messages to manage context length.
-    """
-    # Truncate messages to keep only the most recent ones
-    # If the list is shorter than MAX_CHAT_HISTORY_MESSAGES, it will take all.
-    truncated_messages = streamlit_messages[-MAX_CHAT_HISTORY_MESSAGES:]
-
-    history = []
-    for msg in truncated_messages:
-        role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
-        history.append(ChatMessage(role=role, content=msg["content"]))
-    return history
-
-import time # Added for simulated streaming
-
-def get_agent_response(query: str, chat_history: List[ChatMessage]): # -> Generator[str, None, None]:
-    """
-    Get a response from the agent stored in the session state using the chat method,
-    explicitly passing the conversation history.
-    This function simulates streaming by yielding words with a delay.
-    """
-    agent = st.session_state[AGENT_SESSION_KEY]
-
-    try:
-        # Get temperature from session state
-        current_temperature = st.session_state.get("llm_temperature", 0.7)
-        current_verbosity = st.session_state.get("llm_verbosity", 3) # Default to 3 if not found
-
-        # New logic to set temperature using llama_index.core.Settings
-        if Settings.llm:
-            if hasattr(Settings.llm, 'temperature'):
-                Settings.llm.temperature = current_temperature
-            else:
-                print(f"Warning: Settings.llm ({type(Settings.llm)}) does not have a 'temperature' attribute.")
+    def _analyze_dataframe_tool_fn(self, filename: str, head_rows: int = 5) -> str:
+        if filename not in self.uploaded_dataframes:
+            return f"Error: DataFrame '{filename}' not found. Available dataframes: {list(self.uploaded_dataframes.keys())}"
+        df = self.uploaded_dataframes[filename]
+        # ... (rest of the analysis logic from original function)
+        info_str = f"DataFrame: {filename}\nShape: {df.shape}\nColumns: {', '.join(df.columns)}\n"
+        info_str += f"Data Types:\n{df.dtypes.to_string()}\n"
+        head_rows = max(0, min(head_rows, len(df)))
+        if head_rows > 0:
+            info_str += f"First {head_rows} rows:\n{df.head(head_rows).to_string()}\n"
         else:
-            print("Warning: Settings.llm is not initialized. Cannot set temperature.")
+            info_str += "No head rows requested or available.\n"
+        info_str += f"Summary Statistics:\n{df.describe().to_string()}\n"
+        return info_str
 
-        # Prepend verbosity level to the query
-        modified_query = f"Verbosity Level: {current_verbosity}. {query}"
-
-        # Simulate thinking before responding (optional, but can make spinner more meaningful)
-        # time.sleep(0.5) # Removed as st.spinner is used by st.write_stream
-
-        response = agent.chat(modified_query, chat_history=chat_history)
-        response_text = response.response if hasattr(response, 'response') else str(response)
-
-        words = response_text.split(" ")
-        for word in words:
-            yield word + " "
-            time.sleep(0.05) # Small delay for simulated streaming effect
-
-    except Exception as e:
-        error_message = f"I apologize, but I encountered an error: {str(e)}"
-        print(f"Error getting orchestrator agent response: {type(e).__name__} - {e}")
-        yield error_message # Yield the error message as a single chunk
-
-def create_new_chat_session_in_memory():
-    """
-    Creates a new chat session (ID, name, empty messages) in memory (st.session_state)
-    and sets it as the current chat. Does NOT save to Hugging Face immediately.
-    """
-    new_chat_id = str(uuid.uuid4())
-    
-    new_chat_name = "Current Session" # Default for disabled memory
-    if st.session_state.long_term_memory_enabled:
-        existing_idea_nums = []
-        for name in st.session_state.chat_metadata.values():
-            match = re.match(r"Idea (\d+)", name)
-            if match:
-                existing_idea_nums.append(int(match.group(1)))
-        
-        next_idea_num = 1
-        if existing_idea_nums:
-            next_idea_num = max(existing_idea_nums) + 1
-        new_chat_name = f"Idea {next_idea_num}"
-
-    st.session_state.chat_metadata[new_chat_id] = new_chat_name
-    # Keep generate_llm_greeting here for new chat creation
-    st.session_state.all_chat_messages[new_chat_id] = [{"role": "assistant", "content": _get_initial_greeting_text()}]
-    st.session_state.current_chat_id = new_chat_id
-    st.session_state.messages = st.session_state.all_chat_messages[new_chat_id]
-    st.session_state.chat_modified = False # New chats are initially unsaved
-    
-    # Generate initial prompts for the new chat
-    st.session_state.suggested_prompts = _cached_generate_suggested_prompts(st.session_state.messages)
-
-    print(f"Created new chat: '{new_chat_name}' (ID: {new_chat_id})")
-    return new_chat_id # Return the new chat ID
-
-def switch_chat(chat_id: str):
-    """Switches to an existing chat, ensuring messages are loaded."""
-    if not st.session_state.long_term_memory_enabled:
-        print("Long-term memory disabled. Cannot switch to historical chats. Starting a new temporary session.")
-        create_new_chat_session_in_memory()
-        st.rerun() # Keep rerun here for user-initiated switch when LTM is off
-        return
-
-    if chat_id not in st.session_state.chat_metadata:
-        print(f"Error: Attempted to switch to chat ID '{chat_id}' not found in metadata.")
-        return
-
-    # Messages for the target chat_id should already be loaded in st.session_state.all_chat_messages
-    # by _initialize_user_session_data or _load_user_data_from_hf.
-    # If for some reason they are not, it indicates an heinous issue with the loading logic.
-    if st.session_state.all_chat_messages.get(chat_id) is None:
-        print(f"WARNING: Messages for current chat ID '{chat_id}' were not loaded. Setting to empty list.")
-        st.session_state.all_chat_messages[chat_id] = [] # Fallback
-            
-    st.session_state.messages = st.session_state.all_chat_messages.get(chat_id, [])
-    st.session_state.current_chat_id = chat_id # Ensure current_chat_id is set here
-    
-    st.session_state.suggested_prompts = _cached_generate_suggested_prompts(st.session_state.messages) # Use cached version
-    st.session_state.chat_modified = True # Assume existing chat is modified if switched to (will be saved on next AI response)
-    print(f"Switched to chat: '{st.session_state.chat_metadata.get(chat_id, 'Unknown')}' (ID: {chat_id})")
-    st.rerun() # Keep rerun here for user-initiated switch when LTM is on
-
-def delete_chat_session(chat_id: str):
-    """Deletes a chat history and its metadata from Hugging Face."""
-    if not st.session_state.long_term_memory_enabled:
-        print("Long-term memory disabled. Cannot delete historical chats. Resetting current session.")
-        if chat_id == st.session_state.current_chat_id:
-            create_new_chat_session_in_memory()
-            st.rerun()
-        return
-
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        print("HF_TOKEN environment variable not set. Skipping Hugging Face deletion.")
-        st.error("Cannot delete chat: Hugging Face token not configured.")
-        return
-
-    # Check if the chat to be deleted is the currently active one
-    is_current_chat = (chat_id == st.session_state.current_chat_id)
-
-    try:
-        # Update in-memory session state first
-        if chat_id in st.session_state.all_chat_messages:
-            del st.session_state.all_chat_messages[chat_id]
-        if chat_id in st.session_state.chat_metadata:
-            del st.session_state.chat_metadata[chat_id]
-        
-        # Save updated metadata and messages to Hugging Face
-        # This effectively removes the chat from the JSON files
-        save_chat_metadata(st.session_state.user_id, st.session_state.chat_metadata)
-        
-        # For a full deletion, we need to reload all messages, remove the specific chat_id, and then save the *entire* messages dict.
-        messages_filename_in_repo = f"user_memories/{st.session_state.user_id}_messages.json"
-        messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{messages_filename_in_repo}"
-        
-        # Load current messages, remove the specific chat_id, then save the whole thing back
+    # --- Hugging Face Data Management ---
+    def _load_user_data_from_hf(self, user_id_to_load: str) -> Dict[str, Any]:
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token:
+            print("HF_TOKEN env var not set. Cannot load user data from HF.")
+            return {"metadata": {}, "messages": {}}
+        # ... (logic from original _load_user_data_from_hf, using user_id_to_load)
+        all_chat_metadata = {}
+        all_chat_messages = {}
         try:
-            existing_messages_content = fs.read_text(messages_hf_path, token=hf_token)
-            existing_messages = json.loads(existing_messages_content)
-        except FileNotFoundError:
-            existing_messages = {}
-        
-        if chat_id in existing_messages:
-            del existing_messages[chat_id]
+            metadata_filename_in_repo = f"user_memories/{user_id_to_load}_metadata.json"
+            messages_filename_in_repo = f"user_memories/{user_id_to_load}_messages.json"
+            metadata_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{metadata_filename_in_repo}"
+            messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{messages_filename_in_repo}"
+
+            try:
+                metadata_content = fs.read_text(metadata_hf_path, token=hf_token)
+                all_chat_metadata = json.loads(metadata_content)
+            except FileNotFoundError: # Corrected exception type
+                all_chat_metadata = {} # Default to empty if not found
+            except Exception as e: # Catch other potential errors during load
+                print(f"Error loading metadata for user {user_id_to_load} from {metadata_hf_path}: {e}")
+                all_chat_metadata = {}
+
+
+            try:
+                messages_content = fs.read_text(messages_hf_path, token=hf_token)
+                all_chat_messages = json.loads(messages_content)
+            except FileNotFoundError: # Corrected exception type
+                 all_chat_messages = {} # Default to empty if not found
+            except Exception as e: # Catch other potential errors during load
+                print(f"Error loading messages for user {user_id_to_load} from {messages_hf_path}: {e}")
+                all_chat_messages = {}
+
+            return {"metadata": all_chat_metadata, "messages": all_chat_messages}
+        except Exception as e:
+            print(f"Error loading user data from HF for user {user_id_to_load}: {e}")
+            return {"metadata": {}, "messages": {}}
+
+
+    async def _save_chat_history_hf(self):
+        if not self.long_term_memory_enabled or not self.user_id or not self.current_chat_id:
+            return
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token: return
+
+        try:
+            messages_filename_in_repo = f"user_memories/{self.user_id}_messages.json"
+            messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{messages_filename_in_repo}"
+
+            # Load existing, update, save
+            try:
+                existing_content = fs.read_text(messages_hf_path, token=hf_token)
+                all_user_messages = json.loads(existing_content)
+            except FileNotFoundError: # Corrected exception type
+                all_user_messages = {}
+            except Exception: # Catch other potential errors during load
+                all_user_messages = {}
+
+
+            all_user_messages[self.current_chat_id] = self.messages
             with fs.open(messages_hf_path, "w", token=hf_token) as f:
-                f.write(json.dumps(existing_messages, indent=2))
-            print(f"Chat history for chat {chat_id} explicitly removed from {messages_filename_in_repo} on Hugging Face.")
-        else:
-            print(f"Chat history for chat {chat_id} not found in {messages_filename_in_repo} on Hugging Face.")
-
-
-        print(f"Chat '{chat_id}' deleted from in-memory state and updated on Hugging Face.")
-
-        # If the deleted chat was the current one, switch to another or create a new one
-        if is_current_chat:
-            if st.session_state.chat_metadata:
-                # Switch to the first available chat
-                first_available_chat_id = next(iter(st.session_state.chat_metadata))
-                print(f"Deleted current chat. Switching to: {first_available_chat_id}")
-                # Call switch_chat to handle updating session state and rerunning
-                switch_chat(first_available_chat_id)
-            else:
-                # No other chats left, set to a "no chat" state
-                print("Deleted last chat. Starting a new empty chat.")
-                st.session_state.current_chat_id = None
-                st.session_state.messages = [{"role": "assistant", "content": _get_initial_greeting_text()}]
-                st.session_state.chat_modified = False
-                st.session_state.suggested_prompts = _cached_generate_suggested_prompts(st.session_state.messages) # Generate prompts for new empty chat
-                st.rerun() # Rerun to display the new state
-        else:
-            # If a non-current chat was deleted, just rerun to update the sidebar
-            st.rerun()
-    except Exception as e:
-        print(f"Error deleting chat {chat_id} from Hugging Face: {e}")
-        st.error(f"Error deleting chat from cloud: {e}")
-        # No rerun needed if chat_id wasn't found, as nothing changed.
-
-def rename_chat(chat_id: str, new_name: str): # Modified to accept chat_id
-    """Renames the specified chat."""
-    if not st.session_state.long_term_memory_enabled:
-        print("Long-term memory disabled. Cannot rename chats.")
-        return
-    if chat_id and new_name and new_name != st.session_state.chat_metadata.get(chat_id):
-        st.session_state.chat_metadata[chat_id] = new_name
-        save_chat_metadata(st.session_state.user_id, st.session_state.chat_metadata)
-        print(f"Renamed chat '{chat_id}' to '{new_name}'")
-        # Removed st.rerun() from here as it causes the "no-op" warning in on_change callbacks.
-        # Streamlit will automatically rerun after the on_change event completes.
-
-def get_discussion_markdown(chat_id: str) -> str:
-    """Retrieves messages for a given chat_id and formats them into a Markdown string."""
-    messages = st.session_state.all_chat_messages.get(chat_id, [])
-    markdown_content = []
-    for msg in messages:
-        role = msg["role"].capitalize()
-        content = msg["content"]
-        markdown_content.append(f"**{role}:**\n{content}\n\n---")
-    return "\n".join(markdown_content)
-
-def get_discussion_docx(chat_id: str) -> bytes:
-    """Retrieves messages for a given chat_id and formats them into a DOCX file."""
-    messages = st.session_state.all_chat_messages.get(chat_id, [])
-    document = Document()
-    
-    document.add_heading(f"Chat Discussion: {st.session_state.chat_metadata.get(chat_id, 'Untitled Chat')}", level=1)
-    # Use current_chat_name if available, otherwise default to a generic name
-    document.add_paragraph(f"Exported on: {st.session_state.chat_metadata.get(chat_id, 'Unknown Chat')}") 
-
-    for msg in messages:
-        role = msg["role"].capitalize()
-        content = msg["content"]
-        
-        document.add_heading(f"{role}:", level=3)
-        document.add_paragraph(content)
-        document.add_paragraph("---") # Separator
-
-    # Save document to a BytesIO object
-    byte_stream = BytesIO()
-    document.save(byte_stream)
-    byte_stream.seek(0) # Rewind to the beginning of the stream
-    return byte_stream.getvalue()
-
-def handle_user_input(chat_input_value: str | None):
-    """
-    Process user input (either from chat box or suggested prompt)
-    and update chat with AI response.
-    """
-    prompt_to_process = None
-
-    if hasattr(st.session_state, 'prompt_to_use') and st.session_state.prompt_to_use:
-        prompt_to_process = st.session_state.prompt_to_use
-        st.session_state.prompt_to_use = None
-    elif chat_input_value:
-        prompt_to_process = chat_input_value
-
-    if prompt_to_process:
-        # If this is the first user message in a new, unsaved chat, mark it as modified
-        # and save its metadata for the first time.
-        if not st.session_state.chat_modified and st.session_state.current_chat_id is None:
-            new_chat_id = create_new_chat_session_in_memory()
-            if st.session_state.long_term_memory_enabled:
-                save_chat_metadata(st.session_state.user_id, st.session_state.chat_metadata)
-            st.session_state.chat_modified = True
-            print(f"Activated new chat '{st.session_state.chat_metadata.get(st.session_state.current_chat_id)}'.")
-        elif not st.session_state.chat_modified and len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] == "assistant":
-            st.session_state.chat_modified = True 
-            if st.session_state.long_term_memory_enabled:
-                save_chat_metadata(st.session_state.user_id, st.session_state.chat_metadata)
-            print(f"Chat '{st.session_state.chat_metadata.get(st.session_state.current_chat_id)}' activated and metadata saved.")
-
-        current_user_query = prompt_to_process
-
-        # Format history *before* adding the current user query to st.session_state.messages
-        history_for_agent = format_chat_history(st.session_state.messages)
-
-        # Append the user's message to session state so it's displayed by stui.py
-        st.session_state.messages.append({"role": "user", "content": current_user_query})
-
-        # Display user message immediately (stui handles this based on session_state.messages)
-        # We need to trigger a rerun for stui to pick up the user message before streaming assistant response
-        # However, st.write_stream itself will manage UI updates for the streaming part.
-        # The critical part is that stui.create_interface is called each time to draw messages.
-
-        # Call get_agent_response with the current query and the prepared history
-        response_generator = get_agent_response(current_user_query, chat_history=history_for_agent)
-
-        # Use st.chat_message context manager to ensure assistant's avatar and layout
-        # This part is handled by stui.py which iterates through st.session_state.messages.
-        # We need to ensure the UI is updated to show the user's message *before* starting the stream.
-        # A simple st.rerun() here might be too disruptive if stui is already trying to draw.
-        # The goal is that the user message appears, then the assistant message streams in.
-        # stui.py will draw all messages in st.session_state.messages.
-        # So, we don't add the assistant message to st.session_state.messages yet.
-        # Instead, we display it directly using st.write_stream within a chat_message context.
-
-        # The stui.create_interface function will render existing messages.
-        # For the new, streaming message, we render it here.
-        # This requires that handle_user_input is called in a place where it can write to the main area.
-
-        # This approach assumes handle_user_input is called where it can directly use st.write_stream.
-        # If stui.py is the one rendering all messages based on session_state, this needs careful handling.
-        # For now, let's assume st.write_stream can be called here.
-        # We will append to messages *after* the stream is complete.
-
-        # No, the stui.py renders messages. We should not use st.chat_message here.
-        # We need to append a placeholder to messages, let stui render it, and then update it.
-        # However, st.write_stream is designed to be used directly.
-
-        # Let's adjust: st.write_stream will be called by stui.py or a similar UI rendering function.
-        # This function (handle_user_input) should prepare the generator and potentially store it.
-        # This is getting complicated. The instruction says "use st.write_stream to display".
-
-        # Re-evaluating: The `stui.create_interface` is likely called once.
-        # The chat input is handled by `handle_user_input_callback` which points to this function.
-        # So, this function IS where UI interactions happen for the chat.
-
-        # Add a temporary placeholder for the assistant message for stui.py to render
-        # This is a bit of a hack if st.write_stream is to be used directly *below*.
-        # Let's follow the prompt: use st.write_stream directly for display.
-        # This means that the display of this specific message will happen outside the stui.py loop for previous messages.
-
-        # The user message is already added to st.session_state.messages.
-        # stui.py will render all messages in st.session_state.messages *up to the last one*.
-        # Then we stream the new one.
-
-        full_response_content = ""
-        # The user message is in st.session_state.messages.
-        # The stui.create_interface will draw all messages from st.session_state.messages.
-        # So, before we call st.write_stream, all *previous* messages should be on screen.
-
-        # We need to make sure handle_user_input is called in a context where it can write to the chat display area.
-        # Assuming stui.create_interface sets up the general layout, and then the input handling
-        # can add new messages to the chat area.
-
-        # This is where the new assistant message will appear
-        # with st.chat_message("assistant"): # This is usually handled by the UI loop (stui.py)
-            # Let's assume stui.py has already rendered previous messages.
-            # Now we stream the new one.
-            # full_response_content = st.write_stream(response_generator) # This will render directly.
-
-        # The prompt implies handle_user_input itself should call st.write_stream.
-        # This means stui.py might need to be structured to allow this.
-        # For now, let's assume it's okay to call st.write_stream here.
-        # The stui.py will render all messages based on st.session_state.messages on each run.
-        # So, we should append the user message, then immediately prepare for assistant's response.
-
-        # The challenge: st.write_stream must be called in the main script execution flow, not inside a callback
-        # if the callback doesn't directly manipulate Streamlit elements.
-        # However, `handle_user_input` *is* the callback.
-        # Let's assume `stui.create_interface` calls this, and then this function uses Streamlit commands.
-
-        # The previous messages are rendered by stui.py.
-        # Now, for the new response:
-        # This will write the stream to wherever the current Streamlit cursor is.
-        # This assumes `stui.py` has set up the chat interface area.
-        # We will append the user message, then the assistant response will be streamed.
-        # After streaming, we append the full assistant response to messages for history.
-
-        # The stui.py will call this. It will display all messages from st.session_state.messages.
-        # Then this function will stream the new response.
-        # This seems like the correct flow.
-
-        # We don't need a placeholder in st.session_state.messages for st.write_stream.
-        # st.write_stream handles its own UI output.
-        with st.chat_message("assistant"): # To get the avatar and proper styling.
-            full_response_content = st.write_stream(response_generator)
-
-        st.session_state.messages.append({"role": "assistant", "content": full_response_content})
-
-        # Autosave the current chat history after AI response if it's been modified
-        if st.session_state.chat_modified and st.session_state.long_term_memory_enabled:
-            save_chat_history(st.session_state.user_id, st.session_state.current_chat_id, st.session_state.messages)
-
-        st.session_state.suggested_prompts = _cached_generate_suggested_prompts(st.session_state.messages) # Use cached version
-        st.rerun()
-
-def reset_chat_callback():
-    """Resets the chat by creating a new, unsaved chat session."""
-    print("Resetting chat by creating a new session...")
-    create_new_chat_session_in_memory() # Create new chat in memory
-    st.rerun() # Rerun to display the new chat
-
-def handle_regeneration_request():
-    """Handles the request to regenerate the last assistant response."""
-    if not st.session_state.get("do_regenerate", False):
-        return
-
-    st.session_state.do_regenerate = False
-
-    if not st.session_state.messages or st.session_state.messages[-1]['role'] != 'assistant':
-        print("Warning: Regeneration called but last message is not from assistant or no messages exist.")
-        st.rerun()
-        return
-
-    if len(st.session_state.messages) == 1: # Initial greeting
-        print("Regenerating initial greeting (simulated stream)...")
-        # For the initial greeting, we stream it directly and update the content.
-        response_generator = get_agent_response("Regenerate initial greeting", []) # Query content doesn't really matter here
-
-        # The stui.py will render based on st.session_state.messages.
-        # We need to update messages[0] after streaming.
-        with st.chat_message("assistant"): # This is for display during regeneration
-            full_response_content = st.write_stream(response_generator)
-
-        st.session_state.messages[0]['content'] = full_response_content # Update existing greeting
-
-        if st.session_state.long_term_memory_enabled:
-            save_chat_history(st.session_state.user_id, st.session_state.current_chat_id, st.session_state.messages)
-        st.session_state.suggested_prompts = _cached_generate_suggested_prompts(st.session_state.messages)
-        st.rerun()
-        return
-
-    print("Regenerating last assistant response (simulated stream)...")
-    # Remove last assistant message from state, the UI will reflect this on next rerun (implicitly via st.write_stream)
-    st.session_state.messages.pop()
-
-    if not st.session_state.messages or st.session_state.messages[-1]['role'] != 'user':
-        print("Warning: Cannot regenerate, no preceding user query found after popping assistant message.")
-        # If we can't regenerate, add back a generic message or handle error
-        st.session_state.messages.append({"role": "assistant", "content": "Could not regenerate the previous response."})
-        st.rerun() # Rerun to show the error/fallback message
-        return
-
-    prompt_to_regenerate = st.session_state.messages[-1]['content']
-    # History for regeneration should be up to the message *before* the user query that led to the response being regenerated.
-    # So, it's all messages *excluding* the last user message.
-    history_for_regen = format_chat_history(st.session_state.messages[:-1]) # Exclude current user prompt
-
-    response_generator = get_agent_response(prompt_to_regenerate, chat_history=history_for_regen)
-
-    # Display the streaming response using st.write_stream in the context of an assistant message
-    # This assumes stui.py has already rendered messages up to the point of the one being replaced.
-    with st.chat_message("assistant"):
-        full_response_content = st.write_stream(response_generator)
-
-    # Now, add this regenerated response as a new message.
-    # Or, if stui.py expects the last message to be updated:
-    st.session_state.messages.append({"role": "assistant", "content": full_response_content})
-    # This will mean the regenerated response appears as a new message.
-    # If the goal is to *replace* the popped message, the logic in stui.py would need to handle that,
-    # or we would update st.session_state.messages[-1]['content'] if a placeholder was added.
-    # Given we popped, then do a st.write_stream, then append, this is effectively replacing by adding anew.
-
-    if st.session_state.long_term_memory_enabled:
-        save_chat_history(st.session_state.user_id, st.session_state.current_chat_id, st.session_state.messages)
-    st.session_state.suggested_prompts = _cached_generate_suggested_prompts(st.session_state.messages)
-    st.rerun()
-
-def forget_me_and_reset():
-    """
-    Deletes all user chat histories from the Hugging Face JSON files, removes the user ID cookie,
-    and resets the Streamlit session state to a fresh start.
-    """
-    user_id_to_delete = st.session_state.get("user_id")
-    hf_token = os.getenv("HF_TOKEN")
-
-    if user_id_to_delete and hf_token:
-        try:
-            # Use HF_USER_MEMORIES_DATASET_ID for user memories
-            metadata_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/user_memories/{user_id_to_delete}_metadata.json"
-            messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/user_memories/{user_id_to_delete}_messages.json"
-
-            # Attempt to delete both files
-            deleted_any = False
-            try:
-                fs.rm(metadata_hf_path, token=hf_token)
-                print(f"Deleted metadata file for user '{user_id_to_delete}' from Hugging Face.")
-                deleted_any = True
-            except FileNotFoundError:
-                print(f"Metadata file for user '{user_id_to_delete}' not found, skipping deletion.")
-            except Exception as e:
-                print(f"Error deleting metadata file for user '{user_id_to_delete}': {e}")
-                st.error(f"Failed to delete metadata from cloud: {e}")
-
-            try:
-                fs.rm(messages_hf_path, token=hf_token)
-                print(f"Deleted messages file for user '{user_id_to_delete}' from Hugging Face.")
-                deleted_any = True
-            except FileNotFoundError:
-                print(f"Messages file for user '{user_id_to_delete}' not found, skipping deletion.")
-            except Exception as e:
-                print(f"Error deleting messages file for user '{user_id_to_delete}': {e}")
-                st.error(f"Failed to delete messages from cloud: {e}")
-
-            if deleted_any:
-                print(f"Successfully attempted to delete all data for user '{user_id_to_delete}' from Hugging Face.")
-            else:
-                print(f"No files found to delete for user '{user_id_to_delete}' on Hugging Face.")
-
+                f.write(json.dumps(all_user_messages, indent=2))
+            print(f"Chat history for chat {self.current_chat_id} saved to HF.")
         except Exception as e:
-            print(f"General error during Hugging Face deletion for user {user_id_to_delete}: {e}")
-            st.error(f"Failed to delete user data from cloud: {e}")
-    elif not hf_token:
-        print("HF_TOKEN environment variable not set. Cannot delete user data from Hugging Face.")
-        st.warning("Cannot delete user data from cloud: Hugging Face token not configured.")
+            print(f"Error saving chat history to HF: {e}")
+            await cl.ErrorMessage(content=f"Error saving chat to cloud: {e}", author="System").send()
 
-    # Delete the user ID cookie
-    try:
-        cookies.delete(cookie="user_id")
-        print(f"Deleted user ID cookie for '{user_id_to_delete}'")
-    except Exception as e:
-        print(f"ERROR: Failed to delete user_id cookie for {user_id_to_delete}: {e}")
-        st.error(f"Failed to delete user ID cookie: {e}")
+    async def _save_chat_metadata_hf(self):
+        if not self.long_term_memory_enabled or not self.user_id:
+            return
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token: return
 
-    # Reset session state to clear all chat history and user data in memory
-    st.session_state.chat_metadata = {}
-    st.session_state.all_chat_messages = {}
-    st.session_state.current_chat_id = None
-    st.session_state.messages = [] # Clear messages, will be re-populated by main's init
-    st.session_state.chat_modified = False
-    st.session_state.suggested_prompts = DEFAULT_PROMPTS # Reset to default prompts
-    st.session_state.renaming_chat_id = None
-    st.session_state.uploaded_documents = {}
-    st.session_state.uploaded_dataframes = {}
-    
-    # Crucially, reset the session_control_flags_initialized to force full re-initialization
-    # in the main function on the next rerun.
-    st.session_state.session_control_flags_initialized = False
-    st.session_state._greeting_logic_log_shown_for_current_state = False # Reset for fresh log on next run
-    
-    # Delete user_id from session state to force re-generation of a temporary one
-    if "user_id" in st.session_state:
-        del st.session_state.user_id
+        try:
+            metadata_filename_in_repo = f"user_memories/{self.user_id}_metadata.json"
+            metadata_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{metadata_filename_in_repo}"
+            with fs.open(metadata_hf_path, "w", token=hf_token) as f:
+                f.write(json.dumps(self.chat_metadata, indent=2))
+            print(f"Chat metadata for user {self.user_id} saved to HF.")
+        except Exception as e:
+            print(f"Error saving chat metadata to HF: {e}")
+            await cl.ErrorMessage(content=f"Error saving chat metadata to cloud: {e}", author="System").send()
 
-    # Use JavaScript to clear cookies and force a full page reload
-    # This ensures a complete reset from the browser's perspective.
-    js_code = """
-    <script>
-        function deleteAllCookies() {
-            const cookies = document.cookie.split(';');
-            for (let i = 0; i < cookies.length; i++) {
-                const cookie = cookies[i];
-                const eqPos = cookie.indexOf('=');
-                const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
-                document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
-            }
-        }
-        deleteAllCookies();
-        window.location.reload(true); // Force a hard reload from the server
-    </script>
-    """
-    st.components.v1.html(js_code, height=0, width=0)
+    # --- Chat History Formatting ---
+    def _format_chat_history_for_agent(self) -> List[ChatMessage]:
+        truncated_messages = self.messages[-MAX_CHAT_HISTORY_MESSAGES:]
+        history = []
+        for msg in truncated_messages:
+            role = MessageRole.USER if msg["role"] == "user" else MessageRole.ASSISTANT
+            history.append(ChatMessage(role=role, content=msg["content"]))
+        return history
 
-    print(f"Session reset. New temporary user ID will be generated on next run.")
-    # No st.rerun() here, as the JavaScript reload will handle it.
+    # --- Agent Interaction ---
+    async def get_agent_response_stream(self, query: str) -> AsyncGenerator[str, None]:
+        if not self.agent:
+            yield "Agent not initialized. Cannot process query."
+            return
+        if _global_llm_initialization_error:
+             yield f"Cannot get agent response due to LLM initialization error: {_global_llm_initialization_error}"
+             return
 
-def _set_long_term_memory_preference():
-    """Callback to save the long_term_memory_enabled state to a cookie."""
-    current_value = st.session_state.long_term_memory_enabled
-    try:
-        cookies.set(cookie="long_term_memory_pref", val=str(current_value))
-        print(f"Long-term memory preference saved to cookie: {current_value}")
-    except Exception as e:
-        print(f"ERROR: Failed to save long-term memory preference to cookie: {e}")
-        st.error(f"Failed to save preference: {e}")
-    # No st.rerun() here, as the toggle itself triggers a rerun.
-    # The main loop's memory state change detection will handle the rest.
-    st.session_state._last_memory_state_changed_by_toggle = True
+        try:
+            if Settings.llm: # Ensure Settings.llm is not None
+                if hasattr(Settings.llm, 'temperature'):
+                    Settings.llm.temperature = self.llm_temperature
+                # else: (handle cases where temperature attribute might be missing if other models are used)
+            # else: (handle cases where Settings.llm itself is None)
 
-def main():
-    """Main function to run the Streamlit app."""
-    success, error_message = setup_global_llm_settings()
-    if not success:
-        st.error(error_message)
-        st.stop()
 
-    # --- Long-term memory initialization and change detection ---
-    pref_from_cookie = cookies.get(cookie="long_term_memory_pref")
+            modified_query = f"Verbosity Level: {self.llm_verbosity}. {query}"
+            chat_history_for_agent = self._format_chat_history_for_agent() # Uses self.messages
 
-    if "long_term_memory_enabled" not in st.session_state:
-        if pref_from_cookie is not None:
-            pref_str = str(pref_from_cookie).lower()
-            
-            if pref_str == 'true' or pref_str == '1':
-                st.session_state.long_term_memory_enabled = True
-            elif pref_str == 'false' or pref_str == '0':
-                st.session_state.long_term_memory_enabled = False
+            # LlamaIndex agent.chat is synchronous. For true async streaming with llama-index,
+            # agent.astream_chat() would be used if available and the agent supports it.
+            # For now, we simulate async behavior if agent.chat is blocking.
+            # If create_orchestrator_agent returns an agent with a .chat method that's sync:
+            response = await cl.make_async(self.agent.chat)(modified_query, chat_history=chat_history_for_agent)
+            response_text = response.response if hasattr(response, 'response') else str(response)
+
+            # Simulate streaming token by token (or word by word)
+            for token in response_text.split(" "): # Simplistic word splitting
+                yield token + " "
+                await cl.sleep(0.02) # Small delay for streaming effect
+        except Exception as e:
+            error_message = f"I apologize, but I encountered an error: {str(e)}"
+            print(f"Error getting agent response: {type(e).__name__} - {e}")
+            yield error_message
+
+
+    # --- Chat Management Methods ---
+    async def create_new_chat(self, is_initial_greeting=False):
+        new_chat_id = str(uuid.uuid4())
+        new_chat_name = "Current Session"
+        if self.long_term_memory_enabled:
+            existing_idea_nums = [int(re.match(r"Idea (\d+)", name).group(1)) for name in self.chat_metadata.values() if re.match(r"Idea (\d+)", name)]
+            next_idea_num = max(existing_idea_nums) + 1 if existing_idea_nums else 1
+            new_chat_name = f"Idea {next_idea_num}"
+
+        self.chat_metadata[new_chat_id] = new_chat_name
+        self.messages = [{"role": "assistant", "content": self.initial_greeting_text if is_initial_greeting else "New chat started."}]
+        self.all_chat_messages[new_chat_id] = self.messages
+        self.current_chat_id = new_chat_id
+        self.chat_modified = False # New chats are initially unsaved (metadata saved on first interaction)
+
+        self.user_session.set("current_chat_id", self.current_chat_id) # Save to session for persistence
+        if self.long_term_memory_enabled:
+            await self._save_chat_metadata_hf() # Save new chat's metadata
+            # History saved after first user interaction
+
+        self.suggested_prompts = await self.generate_suggested_prompts_async(self.messages)
+        print(f"Created new chat: '{new_chat_name}' (ID: {new_chat_id})")
+        return new_chat_id
+
+    async def switch_chat(self, chat_id: str):
+        if not self.long_term_memory_enabled:
+            await cl.Message(content="Long-term memory is disabled. Cannot switch to historical chats. Starting a new temporary session.", author="System").send()
+            await self.create_new_chat(is_initial_greeting=True)
+            return
+
+        if chat_id not in self.chat_metadata:
+            await cl.ErrorMessage(content=f"Error: Chat ID '{chat_id}' not found.", author="System").send()
+            return
+
+        self.current_chat_id = chat_id
+        self.messages = self.all_chat_messages.get(chat_id, [])
+        self.chat_modified = True # Assume loaded chat is "modified"
+        self.user_session.set("current_chat_id", self.current_chat_id)
+        self.suggested_prompts = await self.generate_suggested_prompts_async(self.messages)
+        print(f"Switched to chat: '{self.chat_metadata.get(chat_id, 'Unknown')}' (ID: {chat_id})")
+        # UI update will be handled by Chainlit rerun/message flow
+
+    async def delete_chat(self, chat_id: str):
+        if not self.long_term_memory_enabled or not self.user_id:
+            # For non-LTM, "deleting" current chat means starting a new one
+            if chat_id == self.current_chat_id:
+                await self.create_new_chat(is_initial_greeting=True)
+                await cl.Message(content="Current temporary chat cleared. Started a new one.", author="System").send()
+            return
+
+        is_current_chat = (chat_id == self.current_chat_id)
+
+        if chat_id in self.all_chat_messages: del self.all_chat_messages[chat_id]
+        if chat_id in self.chat_metadata: del self.chat_metadata[chat_id]
+
+        await self._save_chat_metadata_hf() # Save updated metadata (removes deleted one)
+        # For messages, we need to save the entire `all_chat_messages` dict again
+        # This is inefficient but matches the original structure.
+        # A better way would be to delete the specific chat file if each chat was a file.
+        hf_token = os.getenv("HF_TOKEN")
+        if hf_token:
+            try:
+                messages_filename_in_repo = f"user_memories/{self.user_id}_messages.json"
+                messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/{messages_filename_in_repo}"
+                with fs.open(messages_hf_path, "w", token=hf_token) as f: # This overwrites with current state
+                    f.write(json.dumps(self.all_chat_messages, indent=2))
+                print(f"Chat history for chat {chat_id} removed from HF by resaving all_chat_messages.")
+            except Exception as e:
+                print(f"Error resaving all_chat_messages after deletion: {e}")
+                await cl.ErrorMessage(content=f"Error updating chat histories on cloud: {e}", author="System").send()
+
+        print(f"Chat '{chat_id}' deleted.")
+
+        if is_current_chat:
+            if self.chat_metadata:
+                await self.switch_chat(next(iter(self.chat_metadata)))
             else:
-                st.session_state.long_term_memory_enabled = True
-                print(f"Warning: Unexpected value for long_term_memory_pref cookie: '{pref_from_cookie}'. Defaulting to True.")
-            print(f"Long-term memory preference loaded from cookie: {st.session_state.long_term_memory_enabled}")
-        else:
-            st.session_state.long_term_memory_enabled = True  # Default: enabled
-            cookies.set(cookie="long_term_memory_pref", val=str(st.session_state.long_term_memory_enabled))
-            print(f"Long-term memory preference not found. Defaulting to {st.session_state.long_term_memory_enabled} and saving cookie.")
+                await self.create_new_chat(is_initial_greeting=True)
+        # UI should refresh based on action callbacks in ui.py
 
-    if "_last_memory_state_was_enabled" not in st.session_state:
-        st.session_state._last_memory_state_was_enabled = st.session_state.long_term_memory_enabled
+    async def rename_chat(self, chat_id: str, new_name: str):
+        if not self.long_term_memory_enabled: return
+        if chat_id and new_name and new_name != self.chat_metadata.get(chat_id):
+            self.chat_metadata[chat_id] = new_name
+            await self._save_chat_metadata_hf()
+            print(f"Renamed chat '{chat_id}' to '{new_name}'")
 
-    # --- Handle Memory State Change ---
-    memory_state_has_changed_this_run = st.session_state._last_memory_state_was_enabled != st.session_state.long_term_memory_enabled
-    if memory_state_has_changed_this_run:
-        print(f"Memory state changed from {st.session_state._last_memory_state_was_enabled} to {st.session_state.long_term_memory_enabled}. Re-initializing session.")
-        st.session_state._last_memory_state_was_enabled = st.session_state.long_term_memory_enabled
-        st.session_state.session_control_flags_initialized = False
+    # --- Content Generation for Download ---
+    def get_discussion_markdown(self, chat_id: str) -> str:
+        messages_to_export = self.all_chat_messages.get(chat_id, [])
+        # ... (same logic as original)
+        markdown_content = []
+        for msg in messages_to_export:
+            role = msg["role"].capitalize()
+            content = msg["content"]
+            # Basic sanitization for markdown (e.g. if content itself has markdown)
+            content = content.replace("*", "\\*").replace("_", "\\_") # Basic escape, might need more
+            markdown_content.append(f"**{role}:**\n{content}\n\n---")
+        return "\n".join(markdown_content)
 
-        if "user_id" in st.session_state:
-            del st.session_state.user_id
+
+    def get_discussion_docx(self, chat_id: str) -> bytes:
+        messages_to_export = self.all_chat_messages.get(chat_id, [])
+        document = Document()
+        document.add_heading(f"Chat Discussion: {self.chat_metadata.get(chat_id, 'Untitled Chat')}", level=1)
+        # ... (same logic as original)
+        for msg in messages_to_export:
+            role = msg["role"].capitalize()
+            content = msg["content"]
+            document.add_heading(f"{role}:", level=3)
+            document.add_paragraph(content)
+            document.add_paragraph("---")
+
+        byte_stream = BytesIO()
+        document.save(byte_stream)
+        byte_stream.seek(0)
+        return byte_stream.getvalue()
+
+    # --- User Input Handling ---
+    async def handle_user_input(self, user_query: str) -> AsyncGenerator[str, None]:
+        """Processes user input and yields agent's response tokens."""
+        if not self.current_chat_id and not self.chat_modified : # First message in a new session potentially
+            # This check might be redundant if create_new_chat is always called first.
+            # However, if a user sends a message when current_chat_id is None (e.g. after forget_me)
+            await self.create_new_chat()
+            # After creating a new chat, its metadata (name) should be saved if LTM is on.
+            if self.long_term_memory_enabled and not self.chat_modified: # chat_modified would be false for a brand new chat
+                 await self._save_chat_metadata_hf() # Save metadata of this new chat
+                 self.chat_modified = True # Mark as modified so history saves next
+
+        self.messages.append({"role": "user", "content": user_query})
         
-        _initialize_user_session_data.clear()
-        print("Cleared user data cache due to memory state change.")
+        # Stream agent response
+        full_response_content = ""
+        async for token in self.get_agent_response_stream(user_query):
+            full_response_content += token
+            yield token # Yield token for ui.py to stream to cl.Message
 
-    if "_last_memory_state_changed_by_toggle" not in st.session_state:
-        st.session_state._last_memory_state_changed_by_toggle = False
+        self.messages.append({"role": "assistant", "content": full_response_content})
+        self.chat_modified = True # Mark that this chat has new messages
 
-    st.session_state._last_memory_state_changed_by_toggle = False
+        if self.long_term_memory_enabled:
+            await self._save_chat_history_hf() # Save full history of current chat
 
+        self.suggested_prompts = await self.generate_suggested_prompts_async(self.messages)
+        # The new suggested prompts will be available in self.suggested_prompts
+        # ui.py can then decide to display them (e.g. after the assistant message)
 
-    # --- Core Session Variable Initialization (runs once per session OR after memory state change) ---
-    if not st.session_state.get("session_control_flags_initialized", False):
-        print("Initializing core session variables...")
+    async def handle_regeneration_request(self) -> AsyncGenerator[str, None]:
+        if not self.messages or self.messages[-1]['role'] != 'assistant':
+            yield "Cannot regenerate: Last message not from assistant or no messages."
+            return
 
-        st.session_state.initial_greeting_shown_for_session = False
-        st.session_state.current_chat_id = None
-        st.session_state.messages = []
-        st.session_state.chat_modified = False
-        st.session_state.suggested_prompts = DEFAULT_PROMPTS
-        st.session_state.renaming_chat_id = None
-        st.session_state.uploaded_documents = {}
-        st.session_state.uploaded_dataframes = {}
+        if len(self.messages) == 1: # Initial greeting
+            # Regenerate greeting (it's stateless, so just call generator again)
+            # This is a simplified regeneration; a true greeting regen might have specific logic
+            self.initial_greeting_text = generate_llm_greeting() # Re-generate
+            self.messages[0]['content'] = self.initial_greeting_text
+            if self.long_term_memory_enabled: await self._save_chat_history_hf()
+            self.suggested_prompts = await self.generate_suggested_prompts_async(self.messages)
+            yield self.initial_greeting_text # Yield the whole new greeting as one "stream"
+            return
 
-        st.session_state.session_control_flags_initialized = True
-        print("Core session variables initialized.")
+        self.messages.pop() # Remove last assistant message
+        if not self.messages or self.messages[-1]['role'] != 'user':
+            yield "Cannot regenerate: No preceding user query found."
+            # Restore popped message or add error to self.messages? For now, stream error.
+            return
 
-    # --- User ID and Chat Data Load (cached, sensitive to memory state) ---
-    user_id_val, chat_metadata_val, all_chat_messages_val, cookie_action = \
-        _initialize_user_session_data(st.session_state.long_term_memory_enabled)
+        last_user_query = self.messages[-1]['content']
+        
+        # History for regen is messages *before* the last user query
+        # Effectively, self.messages now ends with the user query that led to the response we popped.
+        # So, format_chat_history will use messages up to this user query.
+        
+        full_response_content = ""
+        # The agent's chat history for regeneration should be messages *before* the user query.
+        # So, if self.messages currently is [..., user_msg_A, assistant_msg_A, user_msg_B],
+        # and we popped assistant_msg_B, then last_user_query is user_msg_B.
+        # The history for agent should be up to assistant_msg_A.
+        # self._format_chat_history_for_agent() uses self.messages.
+        # We need to temporarily pop the last user message for history formatting, then add it back.
+        
+        temp_last_user_msg = self.messages.pop() # Pop user message for history
+        
+        async for token in self.get_agent_response_stream(last_user_query): # last_user_query is correct
+            full_response_content += token
+            yield token
 
-    st.session_state.user_id = user_id_val
-    st.session_state.chat_metadata = chat_metadata_val
-    st.session_state.all_chat_messages = all_chat_messages_val
+        self.messages.append(temp_last_user_msg) # Add user message back
+        self.messages.append({"role": "assistant", "content": full_response_content}) # Add new assistant response
 
-    # --- Apply cookie actions based on _initialize_user_session_data result ---
-    if cookie_action == "SET_COOKIE":
-        import datetime
-        expires = datetime.datetime.now() + datetime.timedelta(days=365)
-        cookies.set(cookie="user_id", val=user_id_val, expires_at=expires)
-        print(f"Set user_id cookie: {user_id_val}")
-    elif cookie_action == "DELETE_COOKIE":
-        cookies.delete(cookie="user_id")
-        print("Deleted user_id cookie.")
-
-    # --- Agent Initialization (runs once per session) ---
-    if AGENT_SESSION_KEY not in st.session_state:
-        agent_instance, error_message = setup_agent(max_search_results=10) 
-        if agent_instance is None:
-            st.error(error_message)
-            st.stop()
-        st.session_state[AGENT_SESSION_KEY] = agent_instance
-
-    # --- Active Chat and Initial Greeting Logic ---
-    should_rerun_after_init = False
-
-    if st.session_state.long_term_memory_enabled:
-        if st.session_state.current_chat_id and st.session_state.current_chat_id in st.session_state.chat_metadata:
-            if st.session_state.all_chat_messages.get(st.session_state.current_chat_id) is None:
-                print(f"WARNING: Messages for current chat ID '{st.session_state.current_chat_id}' were not loaded. Setting to empty list.")
-                st.session_state.all_chat_messages[st.session_state.current_chat_id] = []
-            
-            st.session_state.messages = st.session_state.all_chat_messages.get(st.session_state.current_chat_id, [])
-            st.session_state.chat_modified = True
-            # print(f"Active chat is '{st.session_state.current_chat_id}'. Messages: {len(st.session_state.messages)}") # Removed verbose log
-
-        elif st.session_state.chat_metadata:
-            first_available_chat_id = next(iter(st.session_state.chat_metadata))
-            print(f"No current chat ID. Selecting first available: '{first_available_chat_id}'.")
-            st.session_state.current_chat_id = first_available_chat_id
-            st.session_state.messages = st.session_state.all_chat_messages.get(first_available_chat_id, [])
-            st.session_state.chat_modified = True
-            should_rerun_after_init = True
-        else:
-            if not st.session_state.initial_greeting_shown_for_session:
-                print("No chats exist. Displaying initial greeting.")
-                st.session_state.messages = [{"role": "assistant", "content": _get_initial_greeting_text()}]
-                st.session_state.initial_greeting_shown_for_session = True
-                st.session_state.current_chat_id = None
-                st.session_state.chat_modified = False
-                should_rerun_after_init = True
-    else:
-        if not st.session_state.current_chat_id or \
-           st.session_state.current_chat_id not in st.session_state.all_chat_messages or \
-           not st.session_state.messages:
-            if not st.session_state.initial_greeting_shown_for_session:
-                print("Creating new temporary session with greeting.")
-                create_new_chat_session_in_memory()
-                st.session_state.initial_greeting_shown_for_session = True
-                should_rerun_after_init = True
-            elif not st.session_state.messages:
-                 print("Messages empty, recreating greeting for temporary session.")
-                 create_new_chat_session_in_memory()
-                 should_rerun_after_init = True
-            else:
-                 st.session_state.messages = st.session_state.all_chat_messages[st.session_state.current_chat_id]
-                 # print(f"Using existing temporary chat '{st.session_state.current_chat_id}'. Messages: {len(st.session_state.messages)}") # Removed verbose log
-        else:
-            st.session_state.messages = st.session_state.all_chat_messages[st.session_state.current_chat_id]
-            # print(f"Confirmed existing temporary chat '{st.session_state.current_chat_id}'. Messages: {len(st.session_state.messages)}") # Removed verbose log
-
-    # Fallback: If messages list is somehow still not a list (should be extremely rare)
-    if not isinstance(st.session_state.messages, list):
-        print("WARNING: Session messages not a list. Resetting to empty list and default prompts.")
-        st.session_state.messages = []
-        st.session_state.suggested_prompts = DEFAULT_PROMPTS
-        st.session_state.current_chat_id = None
-        st.session_state.chat_modified = False
-        should_rerun_after_init = True
-    elif not st.session_state.messages and not st.session_state.initial_greeting_shown_for_session:
-        print("FALLBACK: No messages and no greeting shown. Displaying initial greeting.")
-        st.session_state.messages = [{"role": "assistant", "content": _get_initial_greeting_text()}]
-        st.session_state.initial_greeting_shown_for_session = True
-        st.session_state.current_chat_id = None
-        st.session_state.chat_modified = False
-        should_rerun_after_init = True
-
-    # Update suggested prompts based on the final state of messages
-    if 'suggested_prompts' not in st.session_state or \
-       (st.session_state.messages and st.session_state.suggested_prompts == DEFAULT_PROMPTS and len(st.session_state.messages) > 1) or \
-       (not st.session_state.messages and st.session_state.suggested_prompts != DEFAULT_PROMPTS):
-        print("Updating suggested prompts.")
-        st.session_state.suggested_prompts = _cached_generate_suggested_prompts(st.session_state.messages if st.session_state.messages else [])
-        if not should_rerun_after_init and len(st.session_state.messages) == 1 and st.session_state.messages[0]["role"] == "assistant":
-             should_rerun_after_init = True
+        if self.long_term_memory_enabled: await self._save_chat_history_hf()
+        self.suggested_prompts = await self.generate_suggested_prompts_async(self.messages)
 
 
-    # Final check for rerun after initial chat setup
-    if should_rerun_after_init:
-        st.rerun()
+    async def forget_me_and_reset(self):
+        user_id_to_delete = self.user_id # Current user_id from AppState
+        hf_token = os.getenv("HF_TOKEN")
 
-    if st.session_state.get("do_regenerate", False):
-        handle_regeneration_request()
+        if user_id_to_delete and hf_token and self.long_term_memory_enabled:
+            try:
+                metadata_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/user_memories/{user_id_to_delete}_metadata.json"
+                messages_hf_path = f"datasets/{HF_USER_MEMORIES_DATASET_ID}/user_memories/{user_id_to_delete}_messages.json"
 
-    stui.create_interface(
-        reset_callback=reset_chat_callback,
-        new_chat_callback=lambda: create_new_chat_session_in_memory() and st.rerun(),
-        delete_chat_callback=delete_chat_session,
-        rename_chat_callback=rename_chat, # Pass the modified rename_chat function
-        chat_metadata=st.session_state.chat_metadata,
-        current_chat_id=st.session_state.current_chat_id,
-        switch_chat_callback=switch_chat,
-        get_discussion_markdown_callback=get_discussion_markdown,
-        get_discussion_docx_callback=get_discussion_docx, # Pass the new DOCX callback
-        suggested_prompts_list=st.session_state.suggested_prompts,
-        handle_user_input_callback=handle_user_input,
-        long_term_memory_enabled=st.session_state.long_term_memory_enabled, # Pass the new setting
-        forget_me_callback=forget_me_and_reset, # Pass the new callback
-        set_long_term_memory_callback=_set_long_term_memory_preference # Pass the new callback
-    )
+                # Attempt to delete both files
+                fs.rm([metadata_hf_path, messages_hf_path], token=hf_token, missing_ok=True) # missing_ok=True
+                print(f"Attempted deletion of data for user '{user_id_to_delete}' from Hugging Face.")
+            except Exception as e: # Catch other potential errors during delete
+                print(f"Error deleting data for user {user_id_to_delete} from HF: {e}")
+                await cl.ErrorMessage(content=f"Failed to delete data from cloud: {e}", author="System").send()
 
-    chat_input_for_handler = st.session_state.get("chat_input_value_from_stui")
-    if "chat_input_value_from_stui" in st.session_state: # Ensure the key exists before deleting
-        del st.session_state.chat_input_value_from_stui # Or set to None: st.session_state.chat_input_value_from_stui = None
-    
-    # Call handle_user_input if there's a chat input or a suggested prompt pending
-    if chat_input_for_handler or st.session_state.get('prompt_to_use'):
-        handle_user_input(chat_input_for_handler)
+        # Reset AppState to a fresh state
+        self.user_id = self.user_session.get("id") # Re-assign session ID, or handle new ID generation
+        self.chat_metadata = {}
+        self.all_chat_messages = {}
+        self.current_chat_id = None
+        self.messages = []
+        self.suggested_prompts = DEFAULT_PROMPTS.copy()
+        self.uploaded_documents = {}
+        self.uploaded_dataframes = {}
+        self.chat_modified = False
 
-if __name__ == "__main__":
-    if not os.getenv("GOOGLE_API_KEY"):
-        st.warning("⚠️ GOOGLE_API_KEY environment variable not set. The agent may not work properly.")
-    main()
+        # Also clear relevant items from cl.user_session to ensure a clean slate for Chainlit's UI
+        self.user_session.set("current_chat_id", None)
+        self.user_session.set("messages", []) # ui.py might use this key
+        # If LTM preference was stored in user_session, user might want to reset that too, or not.
+        # For now, LTM preference itself is not reset by "Forget Me".
+
+        # Trigger a new chat creation for the UI
+        await self.create_new_chat(is_initial_greeting=True)
+
+        # Inform ui.py to potentially re-render or clear displays
+        # This is implicitly handled by Chainlit's flow when actions complete or messages are sent.
+        print(f"Session reset after forget_me. New chat started.")
+        await cl.Message(content="All your data associated with the previous session has been cleared. A new session has started.", author="System").send()
+
+
+    async def set_long_term_memory_preference(self, enabled: bool):
+        if self.long_term_memory_enabled == enabled:
+            return # No change
+
+        self.long_term_memory_enabled = enabled
+        self.user_session.set("long_term_memory_pref", enabled)
+        print(f"Long-term memory preference set to: {enabled}")
+
+        # If LTM is now enabled, load data.
+        # If LTM is now disabled, clear persisted data from AppState (but not from HF).
+        if enabled:
+            if self.user_id: # Check user_id exists
+                user_data = self._load_user_data_from_hf(self.user_id)
+                self.chat_metadata = user_data.get("metadata", {})
+                self.all_chat_messages = user_data.get("messages", {})
+                if self.chat_metadata: # If history exists, switch to first/last known chat
+                    last_chat_id = self.user_session.get("current_chat_id")
+                    if last_chat_id and last_chat_id in self.chat_metadata:
+                        self.current_chat_id = last_chat_id
+                    else:
+                        self.current_chat_id = next(iter(self.chat_metadata))
+                    self.messages = self.all_chat_messages.get(self.current_chat_id, [])
+                else: # No history, start new
+                    await self.create_new_chat(is_initial_greeting=True)
+            else: # No user_id, start new
+                 await self.create_new_chat(is_initial_greeting=True)
+        else: # LTM disabled
+            # Clear local loaded history, start a new temporary chat
+            self.chat_metadata = {}
+            self.all_chat_messages = {}
+            await self.create_new_chat(is_initial_greeting=True)
+
+        self.suggested_prompts = await self.generate_suggested_prompts_async(self.messages)
+        # ui.py will need to reflect this change, possibly by re-rendering elements.
+
+    async def update_llm_settings(self, settings: Dict[str, Any]):
+        if "llm_temperature" in settings: self.llm_temperature = float(settings["llm_temperature"])
+        if "llm_verbosity" in settings: self.llm_verbosity = int(settings["llm_verbosity"])
+        if "search_results_count" in settings: self.search_results_count = int(settings["search_results_count"])
+        
+        # Persist to user_session so ui.py can pick them up for display
+        self.user_session.set("llm_temperature", self.llm_temperature)
+        self.user_session.set("llm_verbosity", self.llm_verbosity)
+        self.user_session.set("search_results_count", self.search_results_count)
+
+        # Re-initialize agent if search_results_count changed, as it's a param to create_orchestrator_agent
+        # This is a simplification; a more granular update would be better.
+        if "search_results_count" in settings:
+            await self._setup_agent_async()
+
+        print(f"LLM settings updated: Temp={self.llm_temperature}, Verb={self.llm_verbosity}, SearchN={self.search_results_count}")
+        await cl.Message(content="LLM settings updated.", author="System").send()
+
+    async def generate_suggested_prompts_async(self, chat_history_list: List[Dict[str, Any]]) -> List[str]:
+        # This needs to be async if the underlying generate_suggested_prompts is blocking
+        # or uses network calls. For now, assume it's CPU-bound or fast enough.
+        # If it's an LLM call, it should be async.
+        # For this example, let's make it async.
+        if _global_llm_initialization_error:
+            return DEFAULT_PROMPTS.copy()
+
+        prompts = await cl.make_async(generate_suggested_prompts)(chat_history_list)
+        return prompts
+
+# --- Chainlit Integration ---
+# The main way to integrate is for ui.py's @cl.on_chat_start to create an AppState instance
+# and store it in cl.user_session. Then, all other Chainlit callbacks in ui.py
+# will retrieve this instance and call its methods.
+
+@cl.on_chat_start
+async def chainlit_chat_start():
+    """Called by Chainlit when a new chat session starts."""
+    # Create and initialize AppState
+    app_state = AppState(cl.user_session)
+    await app_state.initialize_session()
+    cl.user_session.set("app_state", app_state) # Store instance in session for ui.py
+
+    # ui.py's on_chat_start will then use this app_state to set up the UI.
+    # This file (app.py) primarily defines the AppState class.
+    # The actual UI interaction flow (sending initial messages, asking for files)
+    # should be in ui.py's @cl.on_chat_start, which can now access the initialized app_state.
+
+    # Example: Let ui.py handle the initial greeting message using app_state.initial_greeting_text
+    # and app_state.suggested_prompts.
+
+    # This function in app.py is mainly to ensure AppState is created and initialized.
+    # The ui.py @cl.on_chat_start will then take over for UI presentation.
+    # Consider moving the UI message sending part to ui.py's on_chat_start.
+
+    # Pass control to ui.py's startup logic by having it retrieve app_state
+    # For example, ui.py's @cl.on_chat_start might look like:
+    #   app_s = cl.user_session.get("app_state")
+    #   await cl.Message(content=app_s.initial_greeting_text).send()
+    #   await display_suggested_prompts(app_s.suggested_prompts) # Another function in ui.py
+    #   await setup_settings_panel(app_s) # etc.
+    print("app.py: @cl.on_chat_start: AppState initialized and stored in user_session.")
+
+
+# The Chainlit CLI will be used to run the app, e.g., `chainlit run app.py -w`
+# Chainlit will automatically discover @cl.on_chat_start, @cl.on_message from ui.py (due to import ui)
+# and other decorators.
+
+# Make sure environment variables (GOOGLE_API_KEY, HF_TOKEN, etc.) are loaded.
+# load_dotenv() is already called at the top.
+
+if not os.getenv("GOOGLE_API_KEY"):
+    print("⚠️ WARNING: GOOGLE_API_KEY environment variable not set. The agent may not work properly.")
+if not os.getenv("HF_TOKEN"):
+    print("⚠️ WARNING: HF_TOKEN environment variable not set. Long-term memory features may not work.")
+
+# The rest of the Streamlit-specific main() function and its setup is removed.
+# Chainlit manages the application lifecycle and event loop.

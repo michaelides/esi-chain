@@ -1,0 +1,26 @@
+chainlit>=1.0.0
+python-dotenv
+llama-index
+llama-index-llms-gemini
+llama-index-embeddings-gemini
+llama-index-program-openai
+llama-index-agent-openai
+llama-index-readers-file
+llama-index-readers-web
+llama-index-readers-semanticscholar
+llama-index-tools-wikipedia # Added
+llama-index-tools-duckduckgo
+llama-index-tools-tavily-research
+llama-index-vector-stores-lancedb
+lancedb
+huggingface_hub
+PyPDF2
+python-docx
+pandas
+openpyxl # for pandas to read/write Excel .xlsx files
+pyreadstat # for reading SPSS .sav files
+google-generativeai
+tavily-python
+# Streamlit and related dependencies are removed:
+# streamlit
+# extra-streamlit-components

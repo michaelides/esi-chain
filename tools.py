@@ -6,7 +6,7 @@ import urllib.parse # Added for URL encoding
 
 from llama_index.core.tools import FunctionTool
 from llama_index.readers.web import SimpleWebPageReader
-from llama_index.readers.semanticscholar import SemanticScholarReader
+from llama_index.readers.semanticscholar import SemanticScholarReader # Corrected to import from its own module
 from llama_index.tools.wikipedia import WikipediaToolSpec
 from llama_index.tools.tavily_research import TavilyToolSpec
 from llama_index.tools.duckduckgo import DuckDuckGoSearchToolSpec
