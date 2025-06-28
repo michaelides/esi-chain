@@ -209,22 +209,13 @@ async def setup_actions_and_settings():
 @cl.on_settings_update
 async def on_settings_update(settings):
     """Called when chat settings are updated by the user."""
-    # This is where we'd handle changes from cl.ChatSettings if we implement them fully.
-    # For now, this is a placeholder.
-    # app_instance = cl.user_session.get("app_instance")
-    # if app_instance:
-    #     if "llm_temperature" in settings:
-    #         app_instance.set_llm_setting("temperature", settings["llm_temperature"])
-    #     if "llm_verbosity" in settings:
-    #         app_instance.set_llm_setting("verbosity", settings["llm_verbosity"])
-    #     # etc.
-    #     await cl.Message(content="Settings updated!").send()
     print(f"Settings updated by user: {settings}")
-    # Update user_session based on incoming settings
-    for key, value in settings.items():
-        cl.user_session.set(key, value)
-        # Potentially call a callback to app.py to persist this setting
-        # set_llm_setting_callback(key, value) # Example
+    app_state = cl.user_session.get("app_state")
+    if app_state:
+        # Pass the updated settings to the AppState instance
+        await app_state.update_llm_settings(settings)
+    else:
+        await cl.ErrorMessage(content="App state not initialized. Cannot update settings.", author="System").send()
     await cl.Message(content="Settings have been updated.").send()
 
 
