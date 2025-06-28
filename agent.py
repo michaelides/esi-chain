@@ -1,8 +1,8 @@
 import os
-import streamlit as st # Import streamlit to access session state
+# import streamlit as st # Removed Streamlit import
 from llama_index.core import Settings
 from llama_index.llms.gemini import Gemini
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from llama_index.embeddings.gemini import GeminiEmbedding # Corrected import
 from llama_index.core.agent import AgentRunner, FunctionCallingAgentWorker
 from typing import Any, List, Dict
 from llama_index.core.tools import FunctionTool # Ensure FunctionTool is imported
