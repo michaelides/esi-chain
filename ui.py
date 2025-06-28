@@ -181,63 +181,7 @@ async def setup_chat_settings_sidebar():
     # cl.user_session.set("uploaded_files_info", uploaded_files_info)
 
 
-@cl.on_chat_start
-async def on_chat_start():
-    """
-    Called when a new chat session starts.
-    Initializes session state, displays welcome message, and sets up UI elements.
-    """
-    ensure_workspace()
-    cl.user_session.set("messages", []) # Initialize messages for this session
 
-    # --- This is where app.py's initialization logic would integrate ---
-    # For example, app.py might have a function to call here:
-    # app_instance = cl.user_session.get("app_instance") # Assuming app.py sets this
-    # if app_instance:
-    #     await app_instance.initialize_session_for_chainlit() # This would set up messages, settings, etc.
-    # else:
-    #     await cl.Message(content="Error: Application backend not initialized correctly.").send()
-    #     return
-
-    # For now, simulate some initial state based on stui.py
-    # In a real scenario, app.py would populate these via a shared AppState or similar
-    cl.user_session.set("llm_temperature", 0.7)
-    cl.user_session.set("llm_verbosity", 3)
-    cl.user_session.set("search_results_count", 5)
-    cl.user_session.set("long_term_memory_enabled", False) # Default, app.py would provide actual
-    cl.user_session.set("uploaded_documents", {})
-    cl.user_session.set("uploaded_dataframes", {})
-    cl.user_session.set("current_chat_id", "default_chat_id") # app.py would provide this
-
-
-    await cl.Message(
-        content="🎓 **ESI: ESI Scholarly Instructor**\nYour AI partner for brainstorming and structuring your dissertation research.",
-        author="System"
-    ).send()
-
-    # Setup sidebar-like elements using cl.ChatSettings and Actions
-    # This part is tricky as Chainlit's UI flow is different from Streamlit's sidebar.
-    # We might present these as initial actions or use a settings modal.
-
-    # For now, let's put settings directly in the user session.
-    # User will need to be informed how to change them (e.g., via a command or future UI element)
-
-    # Display existing messages if any (e.g., if app.py loads a previous session)
-    await display_chat_messages_from_session()
-
-    # Suggested Prompts (if any)
-    # suggested_prompts = app_instance.get_suggested_prompts() # Hypothetical
-    suggested_prompts = ["Help me define my research question.", "Suggest some relevant theories.", "How do I structure my literature review?"]
-    if suggested_prompts:
-        actions = [cl.नास(name=prompt, value=prompt, label=prompt) for prompt in suggested_prompts]
-        await cl.Message(content="Here are some things you can ask:", actions=actions).send()
-
-    # File uploader - Chainlit handles this automatically if `ask_for_file` is used or files are attached.
-    # We need to inform the user how to upload.
-    await cl.Message(content="You can upload files by attaching them to your message or using the upload button.").send()
-
-    # Set up actions that would normally be in the sidebar
-    await setup_actions_and_settings()
 
 
 async def setup_actions_and_settings():
@@ -245,7 +189,7 @@ async def setup_actions_and_settings():
     app_state = cl.user_session.get("app_state") # Assuming app.py provides this
 
     actions = [
-        cl.Action(name="new_chat", value="new_chat", label="➕ New Chat", description="Start a new conversation"),
+        cl.Action(name="new_chat", value="new_chat", label="➕ New Chat", description="Start a new conversation", payload={}),
         # Potentially add "Manage Chats" that opens a modal or lists chats
     ]
 
@@ -254,7 +198,7 @@ async def setup_actions_and_settings():
     # For now, we'll rely on app.py to manage these and potentially make them settable via commands.
 
     if app_state and app_state.get_long_term_memory_enabled(): # Hypothetical
-        actions.append(cl.Action(name="forget_me", value="forget_me", label="🗑️ Forget Me", description="Delete all your saved data"))
+        actions.append(cl.Action(name="forget_me", value="forget_me", label="🗑️ Forget Me", description="Delete all your saved data", payload={}))
 
     # Display chat history if LTM enabled (this is complex with Chainlit's model)
     # chat_metadata = app_state.get_chat_metadata() # Hypothetical
@@ -292,7 +236,7 @@ async def on_message(message: cl.Message):
     """
     Called when the user sends a message or uploads a file.
     """
-    app_instance = cl.user_session.get("app_instance") # Critical: app.py must set this
+    app_state = cl.user_session.get("app_state") # Critical: app.py must set this
 
     # Store user message
     cl.user_session.get("messages").append({"role": "user", "content": message.content})
