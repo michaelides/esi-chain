@@ -511,14 +511,6 @@ class AppState:
         # Effectively, self.messages now ends with the user query that led to the response we popped.
         # So, format_chat_history will use messages up to this user query.
         
-        full_response_content = ""
-        # The agent's chat history for regeneration should be messages *before* the user query.
-        # So, if self.messages currently is [..., user_msg_A, assistant_msg_A, user_msg_B],
-        # and we popped assistant_msg_B, then last_user_query is user_msg_B.
-        # The history for agent should be up to assistant_msg_A.
-        # self._format_chat_history_for_agent() uses self.messages.
-        # We need to temporarily pop the last user message for history formatting, then add it back.
-        
         temp_last_user_msg = self.messages.pop() # Pop user message for history
         
         async for token in self.get_agent_response_stream(last_user_query): # last_user_query is correct
@@ -646,7 +638,8 @@ class AppState:
     async def display_suggested_prompts(self):
         """Displays suggested prompts as actions."""
         if self.suggested_prompts:
-            actions = [cl.Action(name=prompt, value=prompt, label=prompt) for prompt in self.suggested_prompts]
+            # Added payload={} to the cl.Action constructor
+            actions = [cl.Action(name=prompt, value=prompt, label=prompt, payload={}) for prompt in self.suggested_prompts]
             await cl.Message(content="Here are some things you can ask:", actions=actions).send()
 
 # --- Chainlit Integration ---
