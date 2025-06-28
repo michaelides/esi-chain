@@ -325,49 +325,24 @@ async def on_message(message: cl.Message):
 
 
     # --- Call the main input handler from app.py ---
-    # This is where the core logic of the app (agent interaction) happens.
-    # The `handle_user_input_callback` from app.py should be invoked here.
-    # It will return the assistant's response.
-
-    # response_content = await app_instance.handle_user_input(message.content) # Hypothetical
-
-    # For now, simulate a response:
-    # Simulating response generation
-    # In reality, this comes from handle_user_input_callback(message.content)
     if not app_state or not hasattr(app_state, 'handle_user_input'):
         simulated_response = "App instance or handle_user_input not configured. Cannot process message."
         await cl.Message(content=simulated_response, author="System").send()
         return
 
-    # Construct the full context for the handler, similar to how Streamlit app would
-    # This includes current settings, uploaded files info etc.
-    # The handler in app.py will need to be adapted to get this from user_session
+    # Initialize a Chainlit message for streaming the assistant's response
+    msg = cl.Message(content="", author="Assistant")
+    await msg.send() # Send initial empty message to get a handle
 
-    # Before calling handler, make sure app_instance knows about current settings from user_session
-    # app_instance.update_settings_from_chainlit_session(cl.user_session) # Hypothetical
+    full_response_content = ""
+    # Iterate over the async_generator to stream tokens
+    async for token in app_state.handle_user_input(message.content):
+        full_response_content += token
+        await msg.stream_token(token) # Stream token to the UI
 
-    assistant_response_content = await app_state.handle_user_input(message.content)
-
-    # Store assistant response
-    cl.user_session.get("messages").append({"role": "assistant", "content": assistant_response_content})
-
-    # Display assistant response (potentially with elements for files/RAG)
-    # This will be more complex if the response contains markers for files, RAG, etc.
-    # We need to parse `assistant_response_content` like in `display_chat` from stui.py
-
-    # For now, a simple display. We'll enhance this to match stui.py's display_chat logic.
-    # await cl.Message(content=assistant_response_content, author="Assistant").send()
-
-    # Instead of simple send, use the display logic to handle RAG, files etc.
-    # For this, we need to ensure the last message (the one we just got) is included
-    # in what display_chat_messages_from_session processes.
-    # However, display_chat_messages_from_session iterates all. We need to send just the new one.
-
-    # Let's adapt parts of display_chat_messages_from_session for a single message
-    msg_data = {"role": "assistant", "content": assistant_response_content}
-
+    # After streaming, process the full response content for RAG sources and download markers
     elements = []
-    text_to_display = msg_data["content"]
+    text_to_display = full_response_content
     rag_sources_data = []
     code_download_filename = None
     code_download_filepath_relative = None # Relative to project root
@@ -446,7 +421,13 @@ async def on_message(message: cl.Message):
         else:
             elements.append(cl.File(path=code_download_filepath_relative, name=code_download_filename, display="inline"))
 
-    await cl.Message(content=text_to_display if text_to_display else " ", author="Assistant", elements=elements if elements else None).send()
+    # Update the message with the final content and elements
+    msg.content = text_to_display if text_to_display else " "
+    msg.elements = elements if elements else None
+    await msg.update()
+
+    # Store assistant response (the full string content)
+    cl.user_session.get("messages").append({"role": "assistant", "content": full_response_content})
 
 
 @cl.action_callback("new_chat")
