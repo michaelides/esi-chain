@@ -451,20 +451,13 @@ async def on_message(message: cl.Message):
 
 @cl.action_callback("new_chat")
 async def on_new_chat(action: cl.Action):
-    # app_instance = cl.user_session.get("app_instance")
-    # if app_instance and hasattr(app_instance, 'new_chat_session'):
-    #     await app_instance.new_chat_session() # This should reset state in app.py and user_session
-    #     await cl.Message(content="Started a new chat session.").send()
-    #     # Need to re-trigger on_chat_start or a similar re-initialization for the UI
-    #     # This is a bit tricky in Chainlit, might need to refresh or guide user
-    # else:
-    #     await cl.ErrorMessage(content="Could not start new chat: App not configured.").send()
-    # For now, just clear messages and re-run on_chat_start logic
-    cl.user_session.set("messages", [])
-    # Call app.py's new_chat_callback here if it exists and is set
-    # new_chat_callback()
-    await on_chat_start() # This will effectively reset the chat display
-    await cl.Message(content="New chat started. Previous messages cleared from this view.").send()
+    app_state = cl.user_session.get("app_state")
+    if app_state:
+        cl.user_session.set("messages", [])
+        await app_state.create_new_chat() # Call the method on the app_state instance
+        await cl.Message(content="Started a new chat session.").send()
+    else:
+        await cl.ErrorMessage(content="App state not initialized. Cannot start new chat.", author="System").send()
     return "New chat started." # Optional return for action
 
 
