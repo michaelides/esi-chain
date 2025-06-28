@@ -145,13 +145,11 @@ async def setup_chat_settings_sidebar():
         return
 
     # LLM Settings
-    # These will likely become cl.Slider or cl.NumberInput in a cl.ChatSettings context
-    # For now, let's assume app.py initializes these in user_session or provides them
-    # llm_settings = app_state.get_llm_settings() # Hypothetical call
-    llm_temperature = cl.user_session.get("llm_temperature", 0.7)
-    llm_verbosity = cl.user_session.get("llm_verbosity", 3)
-    search_results_count = cl.user_session.get("search_results_count", 5)
-    long_term_memory_enabled = cl.user_session.get("long_term_memory_enabled", False)
+    # Retrieve current settings from app_state or user_session
+    llm_temperature = app_state.llm_temperature if app_state else cl.user_session.get("llm_temperature", 0.7)
+    llm_verbosity = app_state.llm_verbosity if app_state else cl.user_session.get("llm_verbosity", 3)
+    search_results_count = app_state.search_results_count if app_state else cl.user_session.get("search_results_count", 5)
+    long_term_memory_enabled = app_state.long_term_memory_enabled if app_state else cl.user_session.get("long_term_memory_enabled", False)
 
     settings_inputs = [
         cl.Slider(id="llm_temperature", label="Creativity (Temperature)", initial=llm_temperature, min=0.0, max=2.0, step=0.1),
@@ -159,20 +157,15 @@ async def setup_chat_settings_sidebar():
         cl.Slider(id="search_results_count", label="Number of Search Results", initial=search_results_count, min=3, max=15, step=1),
         cl.Switch(id="long_term_memory_enabled", label="Enable Long-term Memory", initial=long_term_memory_enabled)
     ]
-    cl.user_session.set("settings_inputs", settings_inputs) # Store to retrieve values later
+    
+    # Send the ChatSettings object to make the sidebar appear
+    await cl.ChatSettings(settings_inputs).send()
 
-    # Chat History - This is more complex in Chainlit.
-    # Chainlit has its own conversation history. We need to bridge app.py's chat management.
-    # We might use cl.Action buttons for "New Chat", "Delete Chat", etc.
-
-    actions = [
-        cl.Action(name="new_chat", value="new_chat", label="➕ New Chat"),
-        # More actions for rename, delete, download will be added.
-    ]
-    if long_term_memory_enabled:
-        actions.append(cl.Action(name="forget_me", value="forget_me", label="🗑️ Forget Me (Delete All Data)"))
-
-    cl.user_session.set("sidebar_actions", actions)
+    # Actions defined here are not sent to the sidebar directly by Chainlit's default behavior.
+    # actions = [cl.Action(name="new_chat", value="new_chat", label="➕ New Chat")]
+    # if long_term_memory_enabled:
+    #     actions.append(cl.Action(name="forget_me", value="forget_me", label="🗑️ Forget Me (Delete All Data)"))
+    # cl.user_session.set("sidebar_actions", actions)
 
     # File Uploads
     # Chainlit handles file uploads via the UI automatically. We need to process them in on_message or a specific action.
@@ -204,6 +197,10 @@ async def setup_actions_and_settings():
     #         actions.append(cl.Action(name=f"switch_chat_{chat_id}", value=chat_id, label=f"Switch to: {chat_name}"))
 
     cl.user_session.set("main_actions", actions) # Store for display or use in UI elements
+    await cl.Message(content="", actions=actions).send() # Send an empty message just to attach actions
+
+    # Now, set up the actual chat settings sidebar
+    await setup_chat_settings_sidebar()
 
 
 @cl.on_settings_update
