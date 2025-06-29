@@ -32,7 +32,7 @@ async def on_chat_start():
 async def on_message(message: cl.Message):
     """Handles incoming user messages."""
     agent = cl.user_session.get("agent")
-    response = agent.stream_chat(message.content)
+    response = await agent.astream_chat(message.content)
     msg = cl.Message(content="")
     await msg.send()
 
