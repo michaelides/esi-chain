@@ -9,8 +9,8 @@ from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.tools import FunctionTool
-from llama_index.embeddings.google import GoogleGenerativeAIEmbeddings
-from llama_index.llms.google import GoogleGenerativeAI
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from llama_index.llms.gemini import GoogleGenerativeAI
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 # Load environment variables from .env file
