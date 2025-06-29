@@ -10,7 +10,7 @@ from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.tools import FunctionTool
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding # Corrected import
-from llama_index.llms.gemini import GoogleGenerativeAI
+from llama_index.llms.gemini import Gemini  
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 # Load environment variables from .env file
@@ -20,7 +20,7 @@ load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
 # Initialize the LLM
-llm = GoogleGenerativeAI(model="models/gemini-1.5-flash-latest")
+llm = Gemini(model="models/gemini-2.5-flash")
 
 # Configure LlamaIndex global settings
 Settings.llm = llm
