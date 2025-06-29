@@ -5,13 +5,15 @@ from agent import create_agent
 @cl.on_chat_start
 async def on_chat_start():
     """Initializes the agent and settings when a new chat starts."""
-    cl.user_session.set("agent", create_agent())
+    # Set initial temperature for the agent
+    initial_temperature = 0.7
+    cl.user_session.set("agent", create_agent(temperature=initial_temperature))
     await cl.ChatSettings(
         [
             cl.input_widget.Select(
                 id="LLM",
                 label="LLM",
-                values=["gemini-2.5-flash"],
+                values=["gemini-2.5-flash"], # Note: This is a UI label, actual model is set in agent.py
                 initial_value="gemini-2.5-flash",
             ),
             cl.input_widget.Slider(
@@ -20,7 +22,7 @@ async def on_chat_start():
                 min=0.0,
                 max=1.0,
                 step=0.1,
-                initial=0.7,
+                initial=initial_temperature, # Use the initial temperature here
                 description="Controls the randomness of the model's output.",
             ),
         ]
@@ -34,12 +36,15 @@ async def on_message(message: cl.Message):
 
     # Stream the response
     msg = cl.Message(content="")
-    async for token in response.async_stream_tokens():
-        await msg.stream_token(token)
+    # Iterate directly over the response object for streaming chunks
+    async for chunk in response:
+        # Each chunk has a 'delta' attribute containing the streamed token
+        await msg.stream_token(chunk.delta)
     await msg.send()
 
 @cl.on_settings_update
 async def on_settings_update(settings):
     """Updates the agent when settings are changed."""
-    create_agent(temperature=settings["Temperature"])
+    # Recreate the agent with the new temperature setting
+    cl.user_session.set("agent", create_agent(temperature=settings["Temperature"]))
     await cl.Message("Agent settings updated.").send()

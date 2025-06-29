@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 
 import chainlit as cl
 from dotenv import load_dotenv
@@ -19,11 +19,7 @@ load_dotenv()
 # Configure Google API key
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
-# Initialize the LLM
-llm = Gemini(model="gemini-1.5-flash")
-
-# Configure LlamaIndex global settings
-Settings.llm = llm
+# Configure LlamaIndex global settings for embedding model
 Settings.embed_model = GoogleGenAIEmbedding(model_name="models/text-embedding-004")
 
 
@@ -73,10 +69,14 @@ def get_tools() -> List[FunctionTool]:
     return [calculator_tool, search_tool]
 
 
-def create_agent():
+def create_agent(temperature: Optional[float] = 0.7):
     """
     Creates and returns a ReActAgent instance.
     """
+    # Initialize the LLM with the given temperature
+    llm = Gemini(model="gemini-1.5-flash", temperature=temperature)
+    Settings.llm = llm # Set the LLM in global settings
+
     # Load documents (if any)
     # documents = SimpleDirectoryReader("data").load_data()
 
