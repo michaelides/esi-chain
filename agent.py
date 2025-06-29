@@ -4,10 +4,9 @@ from typing import List, Optional
 import chainlit as cl
 from dotenv import load_dotenv
 from llama_index.core import Settings, SimpleDirectoryReader, VectorStoreIndex
-from llama_index.core.agent import AgentRunner, ReActAgent
+from llama_index.core.agent.workflow import ReActAgent
 from llama_index.core.chat_engine import ContextChatEngine
 from llama_index.core.llms import ChatMessage, MessageRole
-from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.tools import FunctionTool
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.llms.gemini import Gemini  
@@ -119,14 +118,10 @@ def create_agent(temperature: Optional[float] = 0.7):
     tools = get_tools()
     tools.append(rag_tool)
 
-    # Initialize chat memory
-    memory = ChatMemoryBuffer.from_defaults(token_limit=3900)
-
     # Create the ReAct agent
     agent = ReActAgent(
-        llm=llm,
-        memory=memory,
         tools=tools,
+        llm=llm,
         verbose=True,
     )
     return agent

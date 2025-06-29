@@ -1,0 +1,16 @@
+llama-index
+chainlit
+python-dotenv
+tavily-python
+semanticscholar
+beautifulsoup4
+requests
+chromadb
+llama-index-llms-gemini
+llama-index-multi-modal-llms-gemini
+llama-index-tools-tavily-research
+llama-index-vector-stores-chroma
+llama-index-readers-web
+llama-index-readers-file
+llama-index-tools-code-interpreter
+llama_index.embeddings.google_genai

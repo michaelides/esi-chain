@@ -32,15 +32,13 @@ async def on_chat_start():
 async def on_message(message: cl.Message):
     """Handles incoming user messages."""
     agent = cl.user_session.get("agent")
-    response = await agent.astream_chat(message.content)
-
-    # Stream the response
+    response = agent.stream_chat(message.content)
     msg = cl.Message(content="")
-    # Iterate directly over the response object for streaming chunks
-    async for chunk in response:
-        # Each chunk has a 'delta' attribute containing the streamed token
-        await msg.stream_token(chunk.delta)
     await msg.send()
+
+    for token in response.response_gen:
+        await msg.stream_token(token)
+    await msg.update()
 
 @cl.on_settings_update
 async def on_settings_update(settings):
