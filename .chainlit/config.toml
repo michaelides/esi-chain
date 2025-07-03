@@ -1,7 +1,6 @@
 [project]
 # Whether to enable telemetry (default: true). No personal data is collected.
-enable_telemetry = true
-
+enable_telemetry = false
 
 # List of environment variables to be provided by each user to use the app.
 user_env = []
@@ -67,12 +66,17 @@ edit_message = true
 [UI]
 # Name of the assistant.
 name = "ESI"
+language = "en-GB"
 
 # default_theme = "dark"
 
-# layout = "wide"
+layout = "wide"
 
 default_sidebar_state = "open"
+
+
+login_page_image = "public/logo.png"
+
 
 # Description of the assistant. This is used for HTML tags.
 # description = ""
@@ -85,14 +89,14 @@ cot = "full"
 # custom_css = "/public/test.css"
 
 # Specify additional attributes for a custom CSS file
-# custom_css_attributes = "media=\"print\""
+# custom_css_attributes = "media="print""
 
 # Specify a JavaScript file that can be used to customize the user interface.
 # The JavaScript file can be served from the public directory.
 # custom_js = "/public/test.js"
 
 # Specify additional attributes for custom JS file
-# custom_js_attributes = "async type = \"module\""
+# custom_js_attributes = "async type = "module""
 
 # Custom login page image, relative to public directory or external URL
 # login_page_image = "/public/custom-background.jpg"
@@ -118,3 +122,16 @@ cot = "full"
 
 [meta]
 generated_by = "2.5.5"
+
+[user_settings]
+[[user_settings.inputs]]
+id = "temperature"
+label = "Temperature"
+type = "slider"
+default = 0.1
+min = 0.0
+max = 1.0
+step = 0.1
+description = "Controls the randomness of the model's output. Higher values mean more random."
+
+
