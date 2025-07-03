@@ -12,11 +12,6 @@ from agent import create_agent, load_system_prompt
 # Load environment variables from .env file
 load_dotenv()
 
-# --- Debugging: Print environment variables to verify they are loaded ---
-print(f"DEBUG: GOOGLE_CLIENT_ID: {os.getenv('GOOGLE_CLIENT_ID')}")
-print(f"DEBUG: GOOGLE_CLIENT_SECRET: {os.getenv('GOOGLE_CLIENT_SECRET')}")
-# --- End Debugging ---
-
 # Global agent variable
 agent = None
 
