@@ -164,6 +164,6 @@ type = "oauth"
     scopes = ["openid", "email", "profile"]
     # The redirect URI that you configured in Google Cloud Console.
     # This must match the URL where your Chainlit app is accessible, followed by /oauth2/callback
-    # Example for local development: redirect_uri = "http://localhost:8000/oauth2/callback"
+    # Example for local development: redirect_uri = "http://localhost:8000/oauth/google/callback"
     # Example for deployment: redirect_uri = "https://your-domain.com/oauth2/callback"
-    redirect_uri = "http://localhost:8000/oauth2/callback" # **UPDATE THIS TO YOUR ACTUAL REDIRECT URI**
+    redirect_uri = "http://localhost:8000/oauth/google/callback" # **UPDATE THIS TO YOUR ACTUAL REDIRECT URI**
