@@ -221,7 +221,7 @@ async def main(message: cl.Message):
                 sendMessage=send_message_to_frontend
             )
             # Send the suggestions as a new message containing only the custom element
-            await cl.Message(elements=[suggestions_element]).send()
+            await cl.Message(content="", elements=[suggestions_element]).send() # FIX: Added content=""
 
     except Exception as e:
         error_msg = f"❌ Error processing message: {str(e)}"
