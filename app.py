@@ -150,11 +150,15 @@ async def generate_follow_up_suggestions(chat_history: list) -> list[str]:
         response = await chain.ainvoke({"chat_history": history_str})
         suggestions_raw = response.content.strip()
         
+        print(f"Raw LLM suggestions response: {suggestions_raw}") # Debugging line
+        
         # Clean up potential markdown code blocks
         if suggestions_raw.startswith("```json") and suggestions_raw.endswith("```"):
             suggestions_raw = suggestions_raw[7:-3].strip()
         
         suggestions_list = json.loads(suggestions_raw)
+        print(f"Parsed suggestions: {suggestions_list}") # Debugging line
+
         if isinstance(suggestions_list, list) and all(isinstance(s, str) for s in suggestions_list):
             return suggestions_list
         else:
@@ -162,7 +166,7 @@ async def generate_follow_up_suggestions(chat_history: list) -> list[str]:
             return []
     except json.JSONDecodeError as e:
         print(f"Error parsing LLM suggestions JSON: {e}")
-        print(f"Raw LLM response: {response.content}")
+        print(f"Raw LLM response that caused error: {suggestions_raw}") # More specific error logging
         return []
     except Exception as e:
         print(f"Error generating follow-up suggestions: {e}")
@@ -214,6 +218,8 @@ async def main(message: cl.Message):
         # After the agent's response, generate and send follow-up suggestions
         generated_suggestions = await generate_follow_up_suggestions(chat_history)
         
+        print(f"Final generated_suggestions for frontend: {generated_suggestions}") # Debugging line
+
         if generated_suggestions:
             suggestions_element = cl.CustomElement(
                 name="FollowUpSuggestions", 
@@ -221,7 +227,7 @@ async def main(message: cl.Message):
                 sendMessage=send_message_to_frontend
             )
             # Send the suggestions as a new message containing only the custom element
-            await cl.Message(content="", elements=[suggestions_element]).send() # FIX: Added content=""
+            await cl.Message(content="", elements=[suggestions_element]).send()
 
     except Exception as e:
         error_msg = f"❌ Error processing message: {str(e)}"
