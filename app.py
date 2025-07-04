@@ -116,18 +116,20 @@ async def setup_agent(settings):
     except Exception as e:
         await cl.Message(content=f"❌ Error updating settings: {str(e)}").send()
 
-
+# Define a wrapper function to emit user messages
+async def send_message_to_frontend(message_content: str):
+    await cl.emit_user_message(message_content)
 
 @cl.on_message
 async def main(message: cl.Message):
     """Handle incoming messages and process them with the agent."""
     global agent
     
-    # Pass cl.emit_user_message as the sendMessage function
+    # Pass the wrapper function to the sendMessage prop
     suggestions = cl.CustomElement(
         name="FollowUpSuggestions", 
         suggestions=["Foo", "Bar"], # These are still hardcoded, will address LLM generation later
-        sendMessage=cl.emit_user_message # Corrected: Pass the emit_user_message function
+        sendMessage=send_message_to_frontend # Pass the new wrapper function
     )
 
     if not agent:
