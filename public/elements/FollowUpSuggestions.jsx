@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MessageSquare, ChevronRight } from "lucide-react";
-import { useChatSession } from "@components/react"; // Corrected import path for useChatSession
+import { useChatSession } from "@chainlit/react"; // Corrected import path for useChatSession
 
 export default function FollowUpSuggestions(props) { // Pass props to the component function
   const [selectedIndex, setSelectedIndex] = useState(null);
