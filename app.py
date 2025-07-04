@@ -127,11 +127,17 @@ async def send_message_to_frontend(message_content: str):
 
 async def generate_follow_up_suggestions(chat_history: list) -> list[str]:
     """Generates follow-up suggestions based on the chat history."""
+    
+    google_api_key = os.environ.get("GOOGLE_API_KEY")
+    if not google_api_key:
+        print("Error: GOOGLE_API_KEY environment variable not set. Cannot generate follow-up suggestions.")
+        return []
+
     suggestion_prompt = ChatPromptTemplate.from_messages([
         ("system", """You are an AI assistant specialized in generating concise follow-up questions or suggestions for a user's research dissertation.
         Based on the provided chat history, generate 3-5 short, relevant, and distinct follow-up suggestions that the user might want to ask next.
         Focus on moving the conversation forward in a helpful way for dissertation research.
-        Output the suggestions as a JSON array of strings, like this:
+        Output the suggestions STRICTLY as a JSON array of strings, like this example:
         ["Suggestion 1", "Suggestion 2", "Suggestion 3"]
         Do NOT include any other text, explanations, or formatting outside the JSON array.
         """),
@@ -139,7 +145,7 @@ async def generate_follow_up_suggestions(chat_history: list) -> list[str]:
     ])
 
     # Use a simple LLM for this task, potentially the same model as the agent
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1, google_api_key=os.environ.get("GOOGLE_API_KEY"))
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1, google_api_key=google_api_key)
 
     chain = suggestion_prompt | llm
 
