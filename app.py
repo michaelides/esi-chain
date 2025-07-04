@@ -4,13 +4,9 @@ from agent import create_agent
 import asyncio
 from typing import Optional
 import os
-from dotenv import load_dotenv
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from agent import create_agent, load_system_prompt
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Global agent variable
 agent = None
@@ -22,14 +18,14 @@ async def start():
 
     # Greet the user
     user = cl.user_session.get("user")
-    if user:
-        await cl.Message(
-            content=f"Hello, {user.identifier}!\nI'm ESI, your AI research assistant. How can I help you today?"
-        ).send()
-    else:
-        await cl.Message(
-            content="Welcome! I'm ESI, your AI research assistant. How can I help you today?"
-        ).send()
+    # if user:
+    #     await cl.Message(
+    #         content=f"Hello, {user.identifier}!\nI'm ESI, your AI research assistant. How can I help you today?"
+    #     ).send()
+    # else:
+    #     await cl.Message(
+    #         content="Welcome! I'm ESI, your AI research assistant. How can I help you today?"
+    #     ).send()
 
     # Define and send settings
     settings = await cl.ChatSettings([
@@ -91,6 +87,8 @@ async def setup_agent(settings):
     except Exception as e:
         await cl.Message(content=f"❌ Error updating settings: {str(e)}").send()
 
+
+
 @cl.on_message
 async def main(message: cl.Message):
     """Handle incoming messages and process them with the agent."""
@@ -143,6 +141,15 @@ async def stop():
     global agent
     agent = None
     print("Chat session ended, agent cleaned up.")
+
+# @cl.oauth_callback
+# def oauth_callback(
+#   provider_id: str,
+#   token: str,
+#   raw_user_data: dict[str, str],
+#   default_user: cl.User,
+# ) -> Optional[cl.User]:
+#   return default_user
 
 if __name__ == "__main__":
     pass

@@ -33,6 +33,13 @@ auto_tag_thread = true
 # Allow users to edit their own messages
 edit_message = true
 
+# Allows user to use speech to text
+speech_to_text = true
+
+# Allows user to use text to speech
+text_to_speech = true
+
+
 # Authorize users to spontaneously upload files with messages
 [features.spontaneous_file_upload]
     enabled = true
@@ -65,7 +72,7 @@ edit_message = true
 
 [UI]
 # Name of the assistant.
-name = "ESI"
+name = "ESI Scholarly Instructor"
 language = "en-GB"
 
 # default_theme = "dark"
@@ -75,11 +82,22 @@ layout = "wide"
 default_sidebar_state = "open"
 
 
-login_page_image = "public/logo.png"
+# Show the readme while the thread is empty.
+show_readme_as_default = true
+
+# Large size content are by default collapsed for a cleaner UI. Set this to false to expand them by default.
+default_collapse_content = true
+
+# The default value for the expand messages settings.
+default_expand_messages = false
+
+
+
+# login_page_image = "public/logo.png"
 
 
 # Description of the assistant. This is used for HTML tags.
-# description = ""
+# description = "AI dissertation supervisor for the MSc in Organizational Psychology at the Norwich Business School"
 
 # Chain of Thought (CoT) display mode. Can be "hidden", "tool_call" or "full".
 cot = "full"
@@ -140,30 +158,10 @@ description = "Controls the randomness of the model's output. Higher values mean
 enabled = true
 
 # Type of authentication. Can be "password" or "oauth".
-type = "oauth"
+type = "password"
 
-# OAuth providers configuration
-[[auth.oauth_providers]]
-    # Unique ID for the provider (e.g., "google", "github")
-    id = "google"
-    # Display name for the login button
-    name = "Google"
-    # Your Google Client ID. It's highly recommended to use an environment variable.
-    # Example: client_id = "${GOOGLE_CLIENT_ID}"
-    client_id = "${GOOGLE_CLIENT_ID}"
-    # Your Google Client Secret. It's highly recommended to use an environment variable.
-    # Example: client_secret = "${GOOGLE_CLIENT_SECRET}"
-    client_secret = "${GOOGLE_CLIENT_SECRET}"
-    # Google's authorization endpoint
-    authorize_url = "https://accounts.google.com/o/oauth2/auth"
-    # Google's token endpoint
-    token_url = "https://oauth2.googleapis.com/token"
-    # Google's user info endpoint
-    userinfo_url = "https://www.googleapis.com/oauth2/v3/userinfo"
-    # Scopes requested from Google. "openid", "email", "profile" are common.
-    scopes = ["openid", "email", "profile"]
-    # The redirect URI that you configured in Google Cloud Console.
-    # This must match the URL where your Chainlit app is accessible, followed by /oauth2/callback
-    # Example for local development: redirect_uri = "http://localhost:8000/oauth2/callback"
-    # Example for deployment: redirect_uri = "https://your-domain.com/oauth2/callback"
-    redirect_uri = "http://localhost:8000/oauth2/callback" # **IMPORTANT: Ensure this matches your Google Cloud Console setting!**
+# Password configuration
+[auth.password]
+# The password for login. It's highly recommended to use an environment variable.
+# Example: password = "${CHAINLIT_PASSWORD}"
+password = "${CHAINLIT_PASSWORD}"

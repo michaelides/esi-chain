@@ -30,3 +30,16 @@
 
 
 add the ability to upload files in the sidebar. Acceptable files include SPSS files (.sav), Rdata, rds, csv, xlsx, pdf, docx, and md. If it is a document then the file should be read and user can ask questions about the content. The files should NOT be added to the RAG - but should be an alternative temporary resource for that user.  If it is a dataset it should be imported as a pandas data.frame and the user can ask questions about thier variables, what analysis to perform etc. They can also ask the ai to perform data analysis procedures. If the later the ai should use the code execution functionality to write python code and execute it to run the analysis                                      
+
+
+
+Create a chatbot application using llamaindex and chainlit using gemini-2.5-flash for the LLM. For the app will read API keys from .env, and the system prompt from esi_agent_instruction.md. The app will be named "ESI: ESI Scholarly Instructor"
+
+The ai agent will have access to different tools: tavily search, semantic scholar search, RAG using chromadb, scraping of websites and pdf files, and code execution. Depending on the query, question, interaction, or request from the user, the ai should decide which tool or tools to invoke.
+The app should be organized in three files app.py (main app), ui.py (chainlit interface), and agent.py (the functionality of the agent and its tools)
+For the rag you you create a separate script for ingesting documents. 
+Users should be able to upload their own files and ask the ai questions about the files - but these should not be stored in the RAG. The files allowed include docx, md, pdf, xlsx, Rdata, csv, rds, sav (SPSS).
+The app will have persistent memory/chats
+Users should be able to change the LLM settings (primarily temperature).
+The app will be named "ESI: ESI Scholarly Instructor"
+

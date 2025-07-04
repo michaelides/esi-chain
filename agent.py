@@ -1,11 +1,13 @@
 import os
 from typing import List, Dict, Any
-from langchain.agents import create_react_agent, AgentExecutor
+from langgraph.prebuilt import create_react_agent
+from langchain_core.runnables import Runnable
 from langchain.tools import Tool
-from langchain_core.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_tavily import TavilySearch
 from langchain_community.tools.semanticscholar.tool import SemanticScholarQueryRun
+from langchain_community.tools import WikipediaQueryRun
+from langchain_community.utilities import WikipediaAPIWrapper
 
 def load_system_prompt() -> str:
     """Load the system prompt from the esi_agent_instruction.md file."""
@@ -39,9 +41,7 @@ def create_tavily_tool() -> Tool:
         func=tavily_search.run
     )
 
-
-
-def create_agent(max_iterations: int = 15, max_execution_time: int = 120, temperature: float = 0.1) -> AgentExecutor:
+def create_agent(temperature: float = 0.1, model: str = "gemini-2.5-flash") -> Runnable:
     """Create and configure the React agent with tools."""
     
     # Load environment variables
@@ -55,7 +55,7 @@ def create_agent(max_iterations: int = 15, max_execution_time: int = 120, temper
     
     # Initialize the LLM
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model=model,
         temperature=temperature,
         google_api_key=google_api_key,
     )
@@ -63,56 +63,20 @@ def create_agent(max_iterations: int = 15, max_execution_time: int = 120, temper
     # Create tools
     tools = [
         create_tavily_tool(),
-        SemanticScholarQueryRun()
+        SemanticScholarQueryRun(top_k_results=10),
+        WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
     ]
     
     # Load system prompt
     system_prompt = load_system_prompt()
     
-    # Create the React prompt template
-    react_prompt = PromptTemplate.from_template(f"""
-{system_prompt}
-
-You have access to the following tools:
-
-{{tools}}
-
-To use a tool, please use the following format:
-
-Thought: Do I need to use a tool? Yes
-Action: the action to take, should be one of [{{tool_names}}]
-Action Input: the input to the action
-Observation: the result of the action
-
-When you have a response to say to the Human, or if you do not need to use a tool, you MUST use the format:
-
-Thought: Do I need to use a tool? No
-Final Answer: [your response here]
-
-Begin!
-
-Question: {{input}}
-Thought:{{agent_scratchpad}}
-""")
-    
     # Create the React agent
     agent = create_react_agent(
-        llm=llm,
-        tools=tools,
-        prompt=react_prompt
+        llm,
+        tools=tools
     )
     
-    # Create the agent executor
-    agent_executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        verbose=True,
-        handle_parsing_errors=lambda error: f"A formatting error occurred: {error}. Please try again, ensuring your response strictly follows the required format.",
-        max_iterations=15,
-        max_execution_time=max_execution_time
-    )
-    
-    return agent_executor
+    return agent
 
 if __name__ == "__main__":
     # Test the agent creation
