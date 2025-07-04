@@ -123,11 +123,11 @@ async def main(message: cl.Message):
     """Handle incoming messages and process them with the agent."""
     global agent
     
-    # Pass cl.send_message as the sendMessage prop to the CustomElement
+    # Pass cl.emit_user_message as the sendMessage function
     suggestions = cl.CustomElement(
         name="FollowUpSuggestions", 
         suggestions=["Foo", "Bar"], # These are still hardcoded, will address LLM generation later
-        sendMessage=cl.send_message # Pass the sendMessage function
+        sendMessage=cl.emit_user_message # Corrected: Pass the emit_user_message function
     )
 
     if not agent:
