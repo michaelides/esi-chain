@@ -11,6 +11,35 @@ from agent import create_agent, load_system_prompt
 # Global agent variable
 agent = None
 
+@cl.set_starters
+async def set_starters():
+    return [
+        cl.Starter(
+            label="New topic",
+            message="Can you help me to identify a new research topic or question for my dissertation? ",
+            icon="public/idea.svg",
+            ),
+        cl.Starter(
+            label="Refine hypotheses",
+            message="I already know my research question but I need help developing my hypotheses",
+            icon="public/research.svg",
+            ),
+        cl.Starter(
+            label="Design the study",
+            message="I need help with my study design",
+            icon="public/plan.svg",
+            ),
+        cl.Starter(
+            label="Data analysis",
+            message="I 've collected my data but I need help with my analysis", 
+            icon="public/data.svg",
+            ),
+        cl.Starter(
+            label="What can you do?",
+            message="Explain what you can do, and how you can help me with my dissertation",
+            icon="public/ai.svg",
+            )
+        ]
 @cl.on_chat_start
 async def start():
     """Initialize the agent when a new chat session starts."""
@@ -94,12 +123,17 @@ async def main(message: cl.Message):
     """Handle incoming messages and process them with the agent."""
     global agent
     
+    suggestions = cl.CustomElement(
+        name="FollowUpSuggestions", suggestions=["Foo", "Bar"]
+    )
+
     if not agent:
         await cl.Message(content="❌ Agent not initialized. Please refresh the page.").send()
         return
 
     # Create a new message for the response
-    response_message = cl.Message(content="")
+    #response_message = cl.Message(content="")
+    response_message = cl.Message(content="Suggestions:", elements=[suggestions])
     await response_message.send()
 
     # Stream the agent's response
