@@ -1,0 +1,8 @@
+{
+  "features": {
+    "auth": {
+      "password_auth": true,
+      "oauth_providers": []
+    }
+  }
+}

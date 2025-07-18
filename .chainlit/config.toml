@@ -1,0 +1,130 @@
+# This is a corrected version of your config.toml.
+# The error "Cannot declare ('project',) twice" indicates your local
+# file has a duplicate [project] section.
+# Please REPLACE the entire content of your local config.toml with the content below.
+
+[project]
+# Whether to enable telemetry (default: true). No personal data is collected.
+enable_telemetry = false
+
+# List of environment variables to be provided by each user to use the app.
+user_env = []
+
+# Duration (in seconds) during which the session is saved when the connection is lost
+session_timeout = 3600
+
+# Duration (in seconds) of the user session expiry
+user_session_timeout = 1296000  # 15 days
+
+# Enable third parties caching (e.g., LangChain cache)
+cache = false
+
+# Authorized origins
+allow_origins = ["*"]
+
+# Enable persistent thread history
+thread_history = true
+
+# IMPORTANT: Set to true to allow optional login.
+# This will remove the mandatory login screen at startup.
+# A "Login" button will appear in the UI for users who want to sign in.
+public_access = true
+
+
+# This setting makes authentication optional. If set to `true`, users would be
+# forced to log in before they could use the chat.
+require_login = false
+
+[features]
+# Process and display HTML in messages. This can be a security risk
+unsafe_allow_html = false
+
+# Process and display mathematical expressions.
+latex = false
+
+# Autoscroll new user messages at the top of the window
+user_message_autoscroll = true
+
+# This enables the built-in email/password authentication system.
+# Chainlit will automatically handle user creation, login, and session management.
+password_auth = true
+
+# Automatically tag threads with the current chat profile (if a chat profile is used)
+auto_tag_thread = true
+
+# Allow users to edit their own messages
+edit_message = true
+
+# Allows user to use speech to text
+speech_to_text = true
+
+# Allows user to use text to speech
+text_to_speech = true
+
+
+# Authorize users to spontaneously upload files with messages
+[features.spontaneous_file_upload]
+    enabled = true
+    accept = ["*/*"]
+    max_files = 20
+    max_size_mb = 500
+
+[features.audio]
+    # Sample rate of the audio
+    sample_rate = 24000
+
+[features.mcp.sse]
+    enabled = true
+
+[features.mcp.stdio]
+    enabled = true
+    allowed_executables = [ "npx", "uvx" ]
+
+[UI]
+# Name of the assistant.
+name = "ESI Scholarly Instructor"
+language = "en-GB"
+
+layout = "wide"
+
+default_sidebar_state = "open"
+
+# Show the readme while the thread is empty.
+show_readme_as_default = true
+
+# Large size content are by default collapsed for a cleaner UI.
+default_collapse_content = true
+
+# The default value for the expand messages settings.
+default_expand_messages = false
+
+login_page_image = "public/logo.png"
+require_login = false
+
+# Description of the assistant. This is used for HTML tags.
+# description = "AI dissertation supervisor for the MSc in Organizational Psychology at the Norwich Business School"
+
+# Chain of Thought (CoT) display mode. Can be "hidden", "tool_call" or "full".
+cot = "full"
+
+## This is the custom login icon but this is not longer used. 
+# custom_js = 'public/login_inject.js'
+
+[meta]
+generated_by = "2.5.5"
+
+[user_settings]
+[[user_settings.inputs]]
+id = "temperature"
+label = "Temperature"
+type = "slider"
+default = 0.1
+min = 0.0
+max = 1.0
+step = 0.1
+description = "Controls the randomness of the model's output. Higher values mean more random."
+
+# --- IMPORTANT ---
+# The [auth] section has been removed from this file.
+# Authentication is now handled by the @cl.password_auth_callback in your app.py
+# and requires the CHAINLIT_AUTH_SECRET environment variable to be set.
