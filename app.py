@@ -1,6 +1,7 @@
 import chainlit as cl
 from chainlit.input_widget import Select, Slider, Switch
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
+from chainlit.types import ThreadDict
 from agent import create_agent, get_captured_figures, clear_captured_figures
 import asyncio
 from typing import Dict, Optional
@@ -24,7 +25,14 @@ agent = None
 
 THINKING_PHRASES_FILE = "thinking_phrases.md"
 _thinking_phrases = []
-
+def load_thinking_phrases():
+    """Loads thinking phrases from the specified markdown file."""
+    global _thinking_phrases
+    try:
+        with open(THINKING_PHRASES_FILE, "r", encoding="utf-8") as f:
+            _thinking_phrases = [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        _thinking_phrases = ["Thinking..."]
 
 @cl.password_auth_callback
 def auth_callback(username: str, password: str):
@@ -127,82 +135,6 @@ async def set_starters():
         )
     ]
 
-def load_thinking_phrases():
-    """Loads thinking phrases from the specified markdown file."""
-    global _thinking_phrases
-    try:
-        with open(THINKING_PHRASES_FILE, "r", encoding="utf-8") as f:
-            _thinking_phrases = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        _thinking_phrases = ["Thinking..."]
-
-
-@cl.on_chat_start
-async def start():
-    """Initialize the agent when a new chat session starts."""
-    global agent
-    # load thinking phrases
-    load_thinking_phrases()
-
-    # Define and send settings
-    settings = await cl.ChatSettings([
-        Slider(
-            id="temperature",
-            label="Temperature",
-            initial=1.0,
-            min=0,
-            max=2,
-            step=0.1,
-            description="Controls creativity and randomness in responses."
-        ),
-        Select(
-            id="model",
-            label="Model",
-            values=[
-                "gemini-2.5-flash",
-                "mistralai/mistral-small-3.2-24b-instruct:free",
-            #    "qwen/qwen3-235b-a22b:free",
-            #    "openrouter/cypher-alpha:free",
-                "deepseek/deepseek-chat-v3-0324:free",
-            #    "thudm/glm-4-32b:free",
-                "moonshotai/kimi-k2"
-            #    "meta-llama/llama-3.3-70b-instruct:free"
-            ],
-            initial_index=0,
-            description="Select the AI model to use for responses."
-        ),
-        Switch(
-            id="include_sources",
-            label="Include Sources",
-            initial=True,
-            description="Whether to include source citations in responses."
-        ),
-        Slider(
-            id="verbosity",
-            label="Verbosity",
-            initial=3,
-            min=1,
-            max=5,
-            step=1,
-            description="Controls the length and detail of responses (1: Laconic, 5: Extremely Verbose)."
-        )
-    ]).send()
-
-    # # Initialize chat history
-    # cl.user_session.set("chat_history", [])
-
-    try:
-        # Create the agent with initial settings
-        agent = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: create_agent(
-                temperature=settings.get("temperature", 1.0),
-                model=settings.get("model", "gemini-2.5-flash"),
-                verbosity=settings.get("verbosity", 3)
-            )
-        )
-    except Exception as e:
-        error_msg = f"❌ Error initializing agent: {str(e)}"
-        await cl.Message(content=error_msg).send()
 
 @cl.on_settings_update
 async def setup_agent(settings):
@@ -273,6 +205,92 @@ async def display_plotly_figures():
         traceback.print_exc()
         # Still try to clear figures even if there was an error
         clear_captured_figures()
+
+@cl.on_chat_start
+async def start():
+    """Initialize the agent when a new chat session starts."""
+    global agent
+    # load thinking phrases
+    load_thinking_phrases()
+
+    # Define and send settings
+    settings = await cl.ChatSettings([
+        Slider(
+            id="temperature",
+            label="Temperature",
+            initial=1.0,
+            min=0,
+            max=2,
+            step=0.1,
+            description="Controls creativity and randomness in responses."
+        ),
+        Select(
+            id="model",
+            label="Model",
+            values=[
+                "gemini-2.5-flash",
+                "mistralai/mistral-small-3.2-24b-instruct:free",
+            #    "qwen/qwen3-235b-a22b:free",
+            #    "openrouter/cypher-alpha:free",
+                "deepseek/deepseek-chat-v3-0324:free",
+            #    "thudm/glm-4-32b:free",
+                "moonshotai/kimi-k2"
+            #    "meta-llama/llama-3.3-70b-instruct:free"
+            ],
+            initial_index=0,
+            description="Select the AI model to use for responses."
+        ),
+        Switch(
+            id="include_sources",
+            label="Include Sources",
+            initial=True,
+            description="Whether to include source citations in responses."
+        ),
+        Slider(
+            id="verbosity",
+            label="Verbosity",
+            initial=3,
+            min=1,
+            max=5,
+            step=1,
+            description="Controls the length and detail of responses (1: Laconic, 5: Extremely Verbose)."
+        )
+    ]).send()
+
+    # # Initialize chat history
+    # cl.user_session.set("chat_history", [])
+
+    try:
+        # Create the agent with initial settings
+        agent = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: create_agent(
+                temperature=settings.get("temperature", 1.0),
+                model=settings.get("model", "gemini-2.5-flash"),
+                verbosity=settings.get("verbosity", 3)
+            )
+        )
+    except Exception as e:
+        error_msg = f"❌ Error initializing agent: {str(e)}"
+        await cl.Message(content=error_msg).send()
+
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: ThreadDict):
+    memory = ConversationBufferMemory(return_messages=True)
+    root_messages = [m for m in thread["steps"] if m["parentId"] == None]
+    for message in root_messages:
+        if message["type"] == "user_message":
+            memory.chat_memory.add_user_message(message["output"])
+        else:
+            memory.chat_memory.add_ai_message(message["output"])
+
+    cl.user_session.set("memory", memory)
+
+    setup_runnable()
+
+
+
 
 @cl.on_message
 async def main(message: cl.Message):
